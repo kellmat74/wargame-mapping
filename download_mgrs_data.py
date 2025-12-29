@@ -21,6 +21,8 @@ import time
 import requests
 from pathlib import Path
 from typing import Tuple, Dict, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 import mgrs
 
 # === Configuration ===
@@ -201,6 +203,19 @@ def download_osm_features(
             chunk_max_lat = min(min_lat + (j + 1) * chunk_size, max_lat)
             chunks.append((chunk_min_lon, chunk_min_lat, chunk_max_lon, chunk_max_lat))
 
+    # Number of parallel workers (be respectful to the API)
+    MAX_WORKERS = 4
+    print_lock = threading.Lock()
+
+    def download_chunk_task(args):
+        """Download a single chunk - used by thread pool."""
+        idx, chunk_bounds, query_body = args
+        try:
+            elements = download_osm_chunk(chunk_bounds, query_body)
+            return (idx, chunk_bounds, elements, None)
+        except Exception as e:
+            return (idx, chunk_bounds, None, str(e))
+
     for filename, query_body in feature_queries.items():
         output_file = output_dir / filename
 
@@ -211,43 +226,40 @@ def download_osm_features(
         print(f"  Downloading {filename}...")
 
         if total_chunks > 1:
-            print(f"    Using {total_chunks} chunks ({num_lon_chunks}x{num_lat_chunks})...")
+            print(f"    Using {total_chunks} chunks with {MAX_WORKERS} parallel workers...")
 
         all_elements = []
         seen_ids = set()  # Deduplicate elements that span chunks
-
         failed_chunks = []
+        completed = 0
 
-        for idx, chunk_bounds in enumerate(chunks):
-            if total_chunks > 1:
-                print(f"      Chunk {idx + 1}/{total_chunks}...", end=" ", flush=True)
+        # Prepare tasks
+        tasks = [(idx, chunk_bounds, query_body) for idx, chunk_bounds in enumerate(chunks)]
 
-            try:
-                elements = download_osm_chunk(chunk_bounds, query_body)
+        # Download chunks in parallel
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {executor.submit(download_chunk_task, task): task[0] for task in tasks}
 
-                # Deduplicate by element ID
-                new_count = 0
-                for elem in elements:
-                    elem_id = (elem.get("type"), elem.get("id"))
-                    if elem_id not in seen_ids:
-                        seen_ids.add(elem_id)
-                        all_elements.append(elem)
-                        new_count += 1
+            for future in as_completed(futures):
+                idx, chunk_bounds, elements, error = future.result()
+                completed += 1
 
-                if total_chunks > 1:
-                    print(f"{new_count} new features")
+                with print_lock:
+                    if error:
+                        print(f"      Chunk {idx + 1}/{total_chunks}: error - {error}")
+                        failed_chunks.append((idx, chunk_bounds))
+                    else:
+                        # Deduplicate by element ID
+                        new_count = 0
+                        for elem in elements:
+                            elem_id = (elem.get("type"), elem.get("id"))
+                            if elem_id not in seen_ids:
+                                seen_ids.add(elem_id)
+                                all_elements.append(elem)
+                                new_count += 1
+                        print(f"      Chunk {idx + 1}/{total_chunks}: {new_count} features ({completed}/{total_chunks} done)")
 
-                time.sleep(API_DELAY)
-
-            except Exception as e:
-                if total_chunks > 1:
-                    print(f"error: {e}")
-                else:
-                    print(f"    Error: {e}")
-                failed_chunks.append((idx, chunk_bounds))
-                time.sleep(API_DELAY)
-
-        # Retry failed chunks with exponential backoff
+        # Retry failed chunks sequentially with exponential backoff
         if failed_chunks:
             print(f"    Retrying {len(failed_chunks)} failed chunks...")
             for retry in range(3):  # Up to 3 retries
