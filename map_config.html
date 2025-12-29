@@ -221,6 +221,20 @@
             background: #d97706;
         }
 
+        .btn-success {
+            background: #10b981;
+            color: #fff;
+        }
+
+        .btn-success:hover {
+            background: #059669;
+        }
+
+        .btn-success:disabled {
+            background: #4a5568;
+            cursor: not-allowed;
+        }
+
         /* Command Output */
         .command-output {
             background: #0d1b2a;
@@ -583,12 +597,34 @@
             <h2>Step 3: Save &amp; Generate</h2>
             <div class="button-row">
                 <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+                <button class="btn btn-success" id="generateBtn" onclick="generateMap()">Generate Map</button>
                 <button class="btn btn-secondary" onclick="resetToDefaults()">Reset</button>
             </div>
-            <div class="region-info" style="margin-top: 15px;">
-                After saving, run in Terminal: <code style="background: #0d1b2a; padding: 2px 6px; border-radius: 3px;">python tactical_map.py</code>
+            <div class="region-info" style="margin-top: 15px;" id="serverModeHint">
+                <span id="serverStatus">Checking server...</span>
             </div>
             <div class="status" id="statusMsg"></div>
+
+            <!-- Progress Output -->
+            <div id="progressContainer" style="display: none; margin-top: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <strong style="color: #00d4ff;">Generation Progress</strong>
+                    <button class="btn btn-secondary" onclick="clearProgress()" style="padding: 4px 10px; font-size: 11px;">Clear</button>
+                </div>
+                <div id="progressOutput" style="
+                    background: #0a0a0a;
+                    border: 1px solid #333;
+                    border-radius: 4px;
+                    padding: 12px;
+                    font-family: 'Monaco', 'Menlo', monospace;
+                    font-size: 11px;
+                    max-height: 300px;
+                    overflow-y: auto;
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                    color: #0f0;
+                "></div>
+            </div>
         </div>
 
         <!-- Current Configuration (collapsible) -->
@@ -1258,6 +1294,139 @@ config = MapConfig(
         }
 
         // ============================================
+        // Server Integration
+        // ============================================
+
+        let serverAvailable = false;
+        let eventSource = null;
+
+        function checkServer() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    serverAvailable = true;
+                    document.getElementById('serverStatus').innerHTML =
+                        '<span style="color: #10b981;">Server connected</span> - Click "Generate Map" to create your map';
+                    document.getElementById('generateBtn').disabled = false;
+                })
+                .catch(() => {
+                    serverAvailable = false;
+                    document.getElementById('serverStatus').innerHTML =
+                        'To generate maps directly, run: <code style="background: #0d1b2a; padding: 2px 6px; border-radius: 3px;">python map_server.py</code>';
+                    document.getElementById('generateBtn').disabled = true;
+                });
+        }
+
+        function generateMap() {
+            if (!serverAvailable) {
+                showStatus('Server not running. Start with: python map_server.py', 'warning');
+                return;
+            }
+
+            const effectiveRegion = state.region || state.autoRegion;
+            if (!effectiveRegion) {
+                showStatus('Cannot determine region. Please enter valid coordinates.', 'warning');
+                return;
+            }
+
+            const config = {
+                name: state.mapName,
+                center_lat: state.centerLat,
+                center_lon: state.centerLon,
+                region: effectiveRegion,
+                rotation_deg: state.rotation
+            };
+
+            // Show progress container
+            const progressContainer = document.getElementById('progressContainer');
+            const progressOutput = document.getElementById('progressOutput');
+            progressContainer.style.display = 'block';
+            progressOutput.innerHTML = '';
+
+            // Disable generate button
+            const btn = document.getElementById('generateBtn');
+            btn.disabled = true;
+            btn.textContent = 'Generating...';
+
+            // Start generation
+            fetch('/api/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                // Connect to progress stream
+                if (eventSource) {
+                    eventSource.close();
+                }
+
+                eventSource = new EventSource('/api/progress');
+
+                eventSource.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+
+                    if (data.type === 'output') {
+                        appendProgress(data.message);
+                    } else if (data.type === 'complete') {
+                        appendProgress('\n✓ ' + data.message, 'success');
+                        showStatus('Map generation complete!', 'success');
+                        finishGeneration();
+                    } else if (data.type === 'error') {
+                        appendProgress('\n✗ Error: ' + data.message, 'error');
+                        showStatus('Generation failed: ' + data.message, 'warning');
+                        finishGeneration();
+                    }
+                };
+
+                eventSource.onerror = () => {
+                    eventSource.close();
+                    finishGeneration();
+                };
+            })
+            .catch(error => {
+                appendProgress('Error: ' + error.message, 'error');
+                showStatus('Failed to start generation: ' + error.message, 'warning');
+                finishGeneration();
+            });
+        }
+
+        function appendProgress(text, type = 'normal') {
+            const progressOutput = document.getElementById('progressOutput');
+            const span = document.createElement('span');
+            span.textContent = text + '\n';
+
+            if (type === 'success') {
+                span.style.color = '#10b981';
+            } else if (type === 'error') {
+                span.style.color = '#ef4444';
+            }
+
+            progressOutput.appendChild(span);
+            progressOutput.scrollTop = progressOutput.scrollHeight;
+        }
+
+        function finishGeneration() {
+            const btn = document.getElementById('generateBtn');
+            btn.disabled = false;
+            btn.textContent = 'Generate Map';
+
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+        }
+
+        function clearProgress() {
+            document.getElementById('progressOutput').innerHTML = '';
+            document.getElementById('progressContainer').style.display = 'none';
+        }
+
+        // ============================================
         // Initialize
         // ============================================
 
@@ -1355,6 +1524,9 @@ config = MapConfig(
             });
 
             updateDisplay();
+
+            // Check if server is running
+            checkServer();
         });
     </script>
 </body>

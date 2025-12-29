@@ -42,7 +42,7 @@ pip install --upgrade pip
 REM Install dependencies
 echo.
 echo Installing dependencies (this may take a few minutes)...
-pip install numpy pandas geopandas rasterio shapely pyproj svgwrite mgrs requests pillow
+pip install numpy pandas geopandas rasterio shapely pyproj svgwrite mgrs requests pillow flask
 
 REM Create directory structure
 echo.

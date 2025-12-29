@@ -65,6 +65,17 @@ python download_mgrs_data.py "51P TS"
 
 ### 4. Generate the Map
 
+**Option A: Web Server (Recommended)**
+
+Start the web server for an integrated experience:
+```bash
+python map_server.py
+```
+
+This opens http://localhost:8080 in your browser. Click "Generate Map" to create your map directly from the web interface with live progress output.
+
+**Option B: Command Line**
+
 Save `map_config.json` from the config tool, then run:
 ```bash
 python tactical_map.py
@@ -114,6 +125,7 @@ The output is styled to match OpenTopoMap aesthetics:
 Wargame Mapping/
 ├── map_config.html      # Web-based configuration tool
 ├── map_config.json      # Generated config file
+├── map_server.py        # Flask web server for integrated workflow
 ├── tactical_map.py      # Main map generator
 ├── download_mgrs_data.py # Data downloader
 ├── setup.sh             # Mac/Linux setup script
@@ -138,6 +150,7 @@ Wargame Mapping/
 - mgrs
 - requests
 - pillow
+- flask
 
 All dependencies are installed automatically by the setup scripts.
 
