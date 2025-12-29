@@ -563,21 +563,48 @@ def merge_road_segments(roads: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         print("    No 'highway' column found, skipping merge")
         return roads
 
-    original_count = len(roads)
+    # Filter to only LineString and MultiLineString geometries
+    # (OSM data sometimes includes Polygons for road areas which can't be merged)
+    line_mask = roads.geometry.apply(
+        lambda g: g is not None and g.geom_type in ('LineString', 'MultiLineString')
+    )
+    roads_lines = roads[line_mask].copy()
+
+    if roads_lines.empty:
+        print("    No LineString geometries to merge")
+        return roads
+
+    original_count = len(roads_lines)
     merged_rows = []
 
     # Group by highway type and merge each group
-    for highway_type, group in roads.groupby('highway'):
+    for highway_type, group in roads_lines.groupby('highway'):
         if len(group) == 0:
             continue
 
         # Collect all geometries for this road type
-        geometries = list(group.geometry)
+        # Flatten MultiLineStrings into individual LineStrings for merging
+        geometries = []
+        for geom in group.geometry:
+            if geom.geom_type == 'MultiLineString':
+                geometries.extend(list(geom.geoms))
+            else:
+                geometries.append(geom)
+
+        if not geometries:
+            continue
 
         # Use linemerge to combine connected segments
         # linemerge returns a LineString if all segments connect into one line,
         # or a MultiLineString if there are disconnected groups
-        merged = linemerge(geometries)
+        try:
+            merged = linemerge(geometries)
+        except Exception as e:
+            print(f"    Warning: Could not merge {highway_type}: {e}")
+            # Keep original geometries on error
+            for _, row in group.iterrows():
+                merged_rows.append(row.to_dict())
+            continue
 
         # Extract individual LineStrings from the result
         if merged.is_empty:
@@ -588,7 +615,9 @@ def merge_road_segments(roads: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
             result_geoms = list(merged.geoms)
         else:
             # Fallback: keep original geometries
-            result_geoms = geometries
+            for _, row in group.iterrows():
+                merged_rows.append(row.to_dict())
+            continue
 
         # Create a row for each merged segment
         # Copy attributes from first row of the group
