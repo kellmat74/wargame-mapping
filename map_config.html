@@ -1,0 +1,1361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tactical Map Configuration</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        }
+
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+
+        h1 {
+            margin: 0 0 20px 0;
+            color: #00d4ff;
+            font-size: 24px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .panel {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid #0f3460;
+        }
+
+        .panel h2 {
+            margin: 0 0 15px 0;
+            font-size: 16px;
+            color: #00d4ff;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+
+        .input-field {
+            flex: 1;
+            min-width: 150px;
+        }
+
+        .input-field label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: #aaa;
+            text-transform: uppercase;
+        }
+
+        .input-field input, .input-field select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            background: #1a1a2e;
+            color: #fff;
+            font-size: 14px;
+        }
+
+        .input-field input:focus, .input-field select:focus {
+            outline: none;
+            border-color: #00d4ff;
+        }
+
+        /* Shift Controls */
+        .shift-controls {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .shift-row {
+            display: flex;
+            gap: 5px;
+        }
+
+        .shift-btn {
+            width: 60px;
+            height: 40px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            background: #1a1a2e;
+            color: #fff;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .shift-btn:hover {
+            background: #0f3460;
+            border-color: #00d4ff;
+        }
+
+        .shift-btn:active {
+            background: #00d4ff;
+            color: #000;
+        }
+
+        .shift-center {
+            width: 60px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            color: #666;
+        }
+
+        .shift-distance {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            justify-content: center;
+        }
+
+        .shift-distance label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+            padding: 8px 12px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .shift-distance input[type="radio"] {
+            accent-color: #00d4ff;
+        }
+
+        .shift-distance label:has(input:checked) {
+            border-color: #00d4ff;
+            background: rgba(0, 212, 255, 0.1);
+        }
+
+        /* Current Config Display */
+        .config-display {
+            background: #0d1b2a;
+            border-radius: 4px;
+            padding: 15px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .config-display .label {
+            color: #888;
+            display: inline-block;
+            width: 120px;
+        }
+
+        .config-display .value {
+            color: #00d4ff;
+        }
+
+        .config-display .value.coords {
+            color: #4ade80;
+        }
+
+        /* Buttons */
+        .button-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #00d4ff;
+            color: #000;
+        }
+
+        .btn-primary:hover {
+            background: #00b8e6;
+        }
+
+        .btn-secondary {
+            background: #0f3460;
+            color: #fff;
+        }
+
+        .btn-secondary:hover {
+            background: #1a4a7a;
+        }
+
+        .btn-warning {
+            background: #f59e0b;
+            color: #000;
+        }
+
+        .btn-warning:hover {
+            background: #d97706;
+        }
+
+        /* Command Output */
+        .command-output {
+            background: #0d1b2a;
+            border-radius: 4px;
+            padding: 15px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            color: #4ade80;
+            display: none;
+        }
+
+        .command-output.visible {
+            display: block;
+        }
+
+        /* Rotation Slider */
+        .rotation-control {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .rotation-control input[type="range"] {
+            flex: 1;
+            height: 6px;
+            -webkit-appearance: none;
+            background: #0f3460;
+            border-radius: 3px;
+            outline: none;
+        }
+
+        .rotation-control input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: #00d4ff;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .rotation-value {
+            min-width: 60px;
+            text-align: center;
+            font-size: 18px;
+            color: #00d4ff;
+        }
+
+        /* Region info */
+        .region-info {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+        }
+
+        /* Copy button */
+        .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            font-size: 11px;
+            background: #0f3460;
+            border: none;
+            border-radius: 3px;
+            color: #fff;
+            cursor: pointer;
+        }
+
+        .copy-btn:hover {
+            background: #1a4a7a;
+        }
+
+        .command-wrapper {
+            position: relative;
+        }
+
+        /* Status messages */
+        .status {
+            padding: 10px 15px;
+            border-radius: 4px;
+            margin-top: 10px;
+            font-size: 13px;
+            display: none;
+        }
+
+        .status.success {
+            display: block;
+            background: rgba(74, 222, 128, 0.1);
+            border: 1px solid #4ade80;
+            color: #4ade80;
+        }
+
+        .status.info {
+            display: block;
+            background: rgba(0, 212, 255, 0.1);
+            border: 1px solid #00d4ff;
+            color: #00d4ff;
+        }
+
+        .status.warning {
+            display: block;
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid #f59e0b;
+            color: #f59e0b;
+        }
+
+        /* MGRS Region Display */
+        .mgrs-display {
+            background: #0d1b2a;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .mgrs-title {
+            font-size: 12px;
+            color: #888;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        .mgrs-squares {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .mgrs-square {
+            padding: 10px 15px;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .mgrs-square.available {
+            background: rgba(74, 222, 128, 0.1);
+            border: 1px solid #4ade80;
+            color: #4ade80;
+        }
+
+        .mgrs-square.missing {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid #f59e0b;
+            color: #f59e0b;
+        }
+
+        .mgrs-square.primary {
+            border-width: 2px;
+        }
+
+        .mgrs-square .icon {
+            font-size: 16px;
+        }
+
+        .mgrs-square .label {
+            font-size: 10px;
+            color: #888;
+            margin-left: 5px;
+        }
+
+        /* Download Section */
+        .download-section {
+            margin-top: 15px;
+            padding: 15px;
+            background: rgba(245, 158, 11, 0.05);
+            border: 1px solid #f59e0b;
+            border-radius: 4px;
+            display: none;
+        }
+
+        .download-section.visible {
+            display: block;
+        }
+
+        .download-section h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: #f59e0b;
+        }
+
+        .download-commands {
+            background: #0d1b2a;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            color: #4ade80;
+        }
+
+        /* Existing regions dropdown */
+        .existing-regions {
+            margin-top: 15px;
+        }
+
+        .existing-regions select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            background: #1a1a2e;
+            color: #fff;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Tactical Map Configuration</h1>
+
+        <!-- Instructions -->
+        <div class="panel" style="background: #0d2137; border-color: #00d4ff;">
+            <h2 style="cursor: pointer;" onclick="toggleInstructions()">
+                📋 Quick Start Guide <span id="instructionsToggle" style="float: right; font-size: 12px;">▼</span>
+            </h2>
+            <div id="instructionsContent">
+                <div style="font-size: 13px; line-height: 1.6; color: #ccc;">
+                    <p style="margin: 0 0 15px 0;"><strong style="color: #00d4ff;">Step 1: Configure Your Map</strong></p>
+                    <ul style="margin: 0 0 15px 0; padding-left: 20px;">
+                        <li>Enter a <strong>Map Name</strong> (used for output filenames)</li>
+                        <li>Set the <strong>Center Location</strong> - paste coordinates in any format:
+                            <ul style="margin: 5px 0; font-size: 11px; color: #888;">
+                                <li>Decimal: 24.1477, 120.6736 (Google Maps format)</li>
+                                <li>DMS: 24°08'51"N 120°40'25"E</li>
+                                <li>MGRS: 51PTT1234567890 or 51P TT 12345 67890</li>
+                            </ul>
+                        </li>
+                        <li>Adjust <strong>Rotation</strong> if needed (0° = North is up)</li>
+                    </ul>
+
+                    <p style="margin: 0 0 15px 0;"><strong style="color: #00d4ff;">Step 2: Check Data Region</strong></p>
+                    <ul style="margin: 0 0 15px 0; padding-left: 20px;">
+                        <li>The tool auto-detects which MGRS region(s) your map needs</li>
+                        <li>If data is missing, copy the download commands shown below</li>
+                    </ul>
+
+                    <p style="margin: 0 0 15px 0;"><strong style="color: #00d4ff;">Step 3: Save &amp; Generate</strong></p>
+                    <ol style="margin: 0 0 15px 0; padding-left: 20px;">
+                        <li>Click <strong>Save Configuration</strong> to write <code style="background: #1a1a2e; padding: 2px 6px; border-radius: 3px;">map_config.json</code></li>
+                        <li>If needed, run the download command in Terminal:
+                            <code style="display: block; background: #1a1a2e; padding: 8px; border-radius: 3px; margin: 5px 0;">python download_mgrs_data.py 51P TT</code>
+                        </li>
+                        <li>Generate the map:
+                            <code style="display: block; background: #1a1a2e; padding: 8px; border-radius: 3px; margin: 5px 0;">python tactical_map.py</code>
+                        </li>
+                    </ol>
+
+                    <p style="margin: 0 0 10px 0;"><strong style="color: #00d4ff;">Step 4: Find Your Output</strong></p>
+                    <ul style="margin: 0; padding-left: 20px;">
+                        <li>SVG map: <code style="background: #1a1a2e; padding: 2px 6px; border-radius: 3px;">output/{region}/{name}/{name}_tactical.svg</code></li>
+                        <li>Hex data: <code style="background: #1a1a2e; padding: 2px 6px; border-radius: 3px;">output/{region}/{name}/{name}_hexdata.json</code></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 1: Map Name -->
+        <div class="panel">
+            <h2>Step 1: Map Name</h2>
+            <div class="input-group">
+                <div class="input-field">
+                    <label>Map Name</label>
+                    <input type="text" id="mapName" value="tactical_map">
+                    <div class="region-info">Used for output filenames (no spaces recommended)</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 1: Center Location -->
+        <div class="panel">
+            <h2>Step 1: Center Location</h2>
+            <div class="input-group" style="margin-bottom: 10px;">
+                <div class="input-field" style="flex: 2;">
+                    <label>Paste Coordinates (auto-detects format)</label>
+                    <input type="text" id="coordPaste" placeholder="Decimal, DMS, or MGRS (e.g. 51PTT1234567890)" style="font-family: monospace;">
+                    <div class="region-info">Supported: Decimal (24.14, 120.67) | DMS (24°08'51"N 120°40'25"E) | MGRS (51PTT1234567890)</div>
+                </div>
+            </div>
+            <div class="input-group">
+                <div class="input-field">
+                    <label>Latitude</label>
+                    <input type="number" id="centerLat" step="0.0001" value="24.1477">
+                </div>
+                <div class="input-field">
+                    <label>Longitude</label>
+                    <input type="number" id="centerLon" step="0.0001" value="120.6736">
+                </div>
+            </div>
+
+            <!-- Shift Controls (inline) -->
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #0f3460;">
+                <label style="display: block; margin-bottom: 10px; font-size: 12px; color: #aaa; text-transform: uppercase;">Fine-tune Position</label>
+                <div style="display: flex; align-items: center; gap: 20px;">
+                    <div class="shift-controls">
+                        <div class="shift-row">
+                            <button class="shift-btn" onclick="shift('N')">N</button>
+                        </div>
+                        <div class="shift-row">
+                            <button class="shift-btn" onclick="shift('W')">W</button>
+                            <div class="shift-center">+</div>
+                            <button class="shift-btn" onclick="shift('E')">E</button>
+                        </div>
+                        <div class="shift-row">
+                            <button class="shift-btn" onclick="shift('S')">S</button>
+                        </div>
+                    </div>
+                    <div class="shift-distance">
+                        <label><input type="radio" name="shiftDist" value="100"> 100m</label>
+                        <label><input type="radio" name="shiftDist" value="500"> 500m</label>
+                        <label><input type="radio" name="shiftDist" value="1000" checked> 1km</label>
+                        <label><input type="radio" name="shiftDist" value="5000"> 5km</label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 1: Rotation -->
+        <div class="panel">
+            <h2>Step 1: Rotation (Optional)</h2>
+            <div class="rotation-control">
+                <span style="color: #888; font-size: 12px;">-180&deg;</span>
+                <input type="range" id="rotationSlider" min="-180" max="180" value="0">
+                <span style="color: #888; font-size: 12px;">180&deg;</span>
+                <div class="rotation-value"><span id="rotationValue">0</span>&deg;</div>
+            </div>
+            <div style="text-align: center; margin-top: 10px; font-size: 12px; color: #888;">
+                Positive = clockwise, Negative = counter-clockwise (0° = North is up)
+            </div>
+        </div>
+
+        <!-- Step 2: Data Region -->
+        <div class="panel">
+            <h2>Step 2: Data Region</h2>
+            <div class="mgrs-display" style="margin-top: 0;">
+                <div class="mgrs-title">Required MGRS Squares for Map Coverage</div>
+                <div class="mgrs-squares" id="mgrsSquares">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <div class="download-section" id="downloadSection">
+                <h3>Missing Data - Download Required</h3>
+                <p style="font-size: 12px; color: #ccc; margin: 0 0 10px 0;">
+                    Run these commands in Terminal to download the missing region data:
+                </p>
+                <div class="download-commands" id="downloadCommands"></div>
+                <button class="btn btn-warning" style="margin-top: 10px;" onclick="copyDownloadCommands()">
+                    Copy Download Commands
+                </button>
+            </div>
+        </div>
+
+        <!-- Step 3: Save & Generate -->
+        <div class="panel">
+            <h2>Step 3: Save &amp; Generate</h2>
+            <div class="button-row">
+                <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+                <button class="btn btn-secondary" onclick="resetToDefaults()">Reset</button>
+            </div>
+            <div class="region-info" style="margin-top: 15px;">
+                After saving, run in Terminal: <code style="background: #0d1b2a; padding: 2px 6px; border-radius: 3px;">python tactical_map.py</code>
+            </div>
+            <div class="status" id="statusMsg"></div>
+        </div>
+
+        <!-- Current Configuration (collapsible) -->
+        <div class="panel">
+            <h2 style="cursor: pointer;" onclick="toggleConfig()">
+                Current Configuration <span id="configToggle" style="float: right; font-size: 12px;">▶</span>
+            </h2>
+            <div class="config-display" id="configDisplay" style="display: none;">
+                <!-- Populated by JS -->
+            </div>
+            <div class="command-wrapper" style="margin-top: 15px; display: none;" id="commandWrapper">
+                <div class="command-output" id="commandOutput"></div>
+                <button class="copy-btn" id="copyBtn" onclick="copyCommand()" style="display: none;">Copy</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================
+        // UI Helper Functions
+        // ============================================
+
+        function toggleInstructions() {
+            const content = document.getElementById('instructionsContent');
+            const toggle = document.getElementById('instructionsToggle');
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                toggle.textContent = '▼';
+            } else {
+                content.style.display = 'none';
+                toggle.textContent = '▶';
+            }
+        }
+
+        function toggleConfig() {
+            const content = document.getElementById('configDisplay');
+            const toggle = document.getElementById('configToggle');
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                toggle.textContent = '▼';
+                updateConfigDisplay();
+            } else {
+                content.style.display = 'none';
+                toggle.textContent = '▶';
+            }
+        }
+
+        // ============================================
+        // MGRS Calculation Functions
+        // ============================================
+
+        // UTM Zone letters for latitude bands
+        const MGRS_BANDS = 'CDEFGHJKLMNPQRSTUVWXX';
+
+        // 100km square column letters (repeats every 3 zones)
+        const MGRS_COL_LETTERS = [
+            'ABCDEFGH', // Zone 1, 4, 7, ...
+            'JKLMNPQR', // Zone 2, 5, 8, ...
+            'STUVWXYZ'  // Zone 3, 6, 9, ...
+        ];
+
+        // 100km square row letters (repeats every 2M northing)
+        const MGRS_ROW_LETTERS_ODD = 'ABCDEFGHJKLMNPQRSTUV';  // Odd zones
+        const MGRS_ROW_LETTERS_EVEN = 'FGHJKLMNPQRSTUVABCDE'; // Even zones
+
+        function latLonToUTM(lat, lon) {
+            // Simplified UTM conversion
+            const zone = Math.floor((lon + 180) / 6) + 1;
+
+            // WGS84 parameters
+            const a = 6378137.0;
+            const f = 1 / 298.257223563;
+            const k0 = 0.9996;
+
+            const latRad = lat * Math.PI / 180;
+            const lonRad = lon * Math.PI / 180;
+
+            const lonOrigin = (zone - 1) * 6 - 180 + 3;
+            const lonOriginRad = lonOrigin * Math.PI / 180;
+
+            const e2 = 2 * f - f * f;
+            const ep2 = e2 / (1 - e2);
+
+            const N = a / Math.sqrt(1 - e2 * Math.sin(latRad) * Math.sin(latRad));
+            const T = Math.tan(latRad) * Math.tan(latRad);
+            const C = ep2 * Math.cos(latRad) * Math.cos(latRad);
+            const A = Math.cos(latRad) * (lonRad - lonOriginRad);
+
+            const M = a * ((1 - e2/4 - 3*e2*e2/64 - 5*e2*e2*e2/256) * latRad
+                - (3*e2/8 + 3*e2*e2/32 + 45*e2*e2*e2/1024) * Math.sin(2*latRad)
+                + (15*e2*e2/256 + 45*e2*e2*e2/1024) * Math.sin(4*latRad)
+                - (35*e2*e2*e2/3072) * Math.sin(6*latRad));
+
+            const easting = k0 * N * (A + (1-T+C)*A*A*A/6
+                + (5-18*T+T*T+72*C-58*ep2)*A*A*A*A*A/120) + 500000;
+
+            let northing = k0 * (M + N * Math.tan(latRad) * (A*A/2
+                + (5-T+9*C+4*C*C)*A*A*A*A/24
+                + (61-58*T+T*T+600*C-330*ep2)*A*A*A*A*A*A/720));
+
+            if (lat < 0) {
+                northing += 10000000;
+            }
+
+            return { zone, easting, northing, hemisphere: lat >= 0 ? 'N' : 'S' };
+        }
+
+        function getLatitudeBand(lat) {
+            if (lat < -80) return 'C';
+            if (lat >= 84) return 'X';
+            const idx = Math.floor((lat + 80) / 8);
+            return MGRS_BANDS[idx];
+        }
+
+        function get100kmSquareId(zone, easting, northing, hemisphere) {
+            // Column letter
+            const setIndex = (zone - 1) % 3;
+            const colLetters = MGRS_COL_LETTERS[setIndex];
+            const col100km = Math.floor(easting / 100000);
+            const colLetter = colLetters[(col100km - 1) % 8];
+
+            // Row letter
+            const rowLetters = (zone % 2 === 1) ? MGRS_ROW_LETTERS_ODD : MGRS_ROW_LETTERS_EVEN;
+            const row100km = Math.floor(northing / 100000) % 20;
+            const rowLetter = rowLetters[row100km];
+
+            return colLetter + rowLetter;
+        }
+
+        function latLonToMGRS(lat, lon) {
+            const utm = latLonToUTM(lat, lon);
+            const band = getLatitudeBand(lat);
+            const squareId = get100kmSquareId(utm.zone, utm.easting, utm.northing, utm.hemisphere);
+
+            return {
+                gzd: `${utm.zone}${band}`,
+                square: squareId,
+                full: `${utm.zone}${band} ${squareId}`,
+                path: `${utm.zone}${band}/${squareId}`
+            };
+        }
+
+        // Reverse conversion: UTM to Lat/Lon
+        function utmToLatLon(zone, easting, northing, hemisphere) {
+            const a = 6378137.0;
+            const f = 1 / 298.257223563;
+            const k0 = 0.9996;
+            const e2 = 2 * f - f * f;
+            const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+            const ep2 = e2 / (1 - e2);
+
+            const x = easting - 500000;
+            let y = northing;
+            if (hemisphere === 'S') {
+                y -= 10000000;
+            }
+
+            const lonOrigin = (zone - 1) * 6 - 180 + 3;
+            const M = y / k0;
+            const mu = M / (a * (1 - e2/4 - 3*e2*e2/64 - 5*e2*e2*e2/256));
+
+            const phi1 = mu + (3*e1/2 - 27*e1*e1*e1/32) * Math.sin(2*mu)
+                + (21*e1*e1/16 - 55*e1*e1*e1*e1/32) * Math.sin(4*mu)
+                + (151*e1*e1*e1/96) * Math.sin(6*mu);
+
+            const N1 = a / Math.sqrt(1 - e2 * Math.sin(phi1) * Math.sin(phi1));
+            const T1 = Math.tan(phi1) * Math.tan(phi1);
+            const C1 = ep2 * Math.cos(phi1) * Math.cos(phi1);
+            const R1 = a * (1 - e2) / Math.pow(1 - e2 * Math.sin(phi1) * Math.sin(phi1), 1.5);
+            const D = x / (N1 * k0);
+
+            const lat = phi1 - (N1 * Math.tan(phi1) / R1) * (D*D/2
+                - (5 + 3*T1 + 10*C1 - 4*C1*C1 - 9*ep2) * D*D*D*D/24
+                + (61 + 90*T1 + 298*C1 + 45*T1*T1 - 252*ep2 - 3*C1*C1) * D*D*D*D*D*D/720);
+
+            const lon = lonOrigin + (D - (1 + 2*T1 + C1) * D*D*D/6
+                + (5 - 2*C1 + 28*T1 - 3*C1*C1 + 8*ep2 + 24*T1*T1) * D*D*D*D*D/120) / Math.cos(phi1);
+
+            return {
+                lat: lat * 180 / Math.PI,
+                lon: lon * 180 / Math.PI
+            };
+        }
+
+        // Parse MGRS and convert to Lat/Lon
+        function mgrsToLatLon(mgrsStr) {
+            // Remove spaces and convert to uppercase
+            const mgrs = mgrsStr.replace(/\s+/g, '').toUpperCase();
+
+            // Parse MGRS: zone(1-2 digits) + band(1 letter) + square(2 letters) + digits(even count)
+            const match = mgrs.match(/^(\d{1,2})([C-X])([A-HJ-NP-Z]{2})(\d*)$/);
+            if (!match) {
+                return null;
+            }
+
+            const zone = parseInt(match[1]);
+            const band = match[2];
+            const squareId = match[3];
+            const digits = match[4];
+
+            // Digits must be even (equal easting/northing)
+            if (digits.length % 2 !== 0) {
+                return null;
+            }
+
+            // Parse easting and northing from digits
+            const precision = digits.length / 2;
+            let easting100k, northing100k;
+
+            if (precision === 0) {
+                // Center of 100km square
+                easting100k = 50000;
+                northing100k = 50000;
+            } else {
+                const eastDigits = digits.slice(0, precision);
+                const northDigits = digits.slice(precision);
+                // Scale to meters (pad to 5 digits)
+                easting100k = parseInt(eastDigits) * Math.pow(10, 5 - precision);
+                northing100k = parseInt(northDigits) * Math.pow(10, 5 - precision);
+            }
+
+            // Get column letter index
+            const setIndex = (zone - 1) % 3;
+            const colLetters = MGRS_COL_LETTERS[setIndex];
+            const colIndex = colLetters.indexOf(squareId[0]);
+            if (colIndex === -1) return null;
+
+            // Get row letter index
+            const rowLetters = (zone % 2 === 1) ? MGRS_ROW_LETTERS_ODD : MGRS_ROW_LETTERS_EVEN;
+            const rowIndex = rowLetters.indexOf(squareId[1]);
+            if (rowIndex === -1) return null;
+
+            // Calculate UTM easting
+            const easting = (colIndex + 1) * 100000 + easting100k;
+
+            // Calculate UTM northing - need to determine the correct 2M northing cycle
+            // based on the latitude band
+            const bandIndex = MGRS_BANDS.indexOf(band);
+            if (bandIndex === -1) return null;
+
+            // Approximate latitude for this band
+            const bandLat = -80 + bandIndex * 8 + 4; // center of band
+            const hemisphere = bandLat >= 0 ? 'N' : 'S';
+
+            // Calculate base northing from row index
+            let baseNorthing = rowIndex * 100000;
+
+            // Determine which 2,000,000m cycle we're in based on band
+            // Each latitude band spans roughly 888km of northing
+            // We need to find the right multiple of 2,000,000
+            const bandMinNorthing = (bandIndex * 8 + (-80)) >= 0 ?
+                ((bandIndex * 8 + (-80)) / 90 * 10000000) :
+                10000000 + ((bandIndex * 8 + (-80)) / 90 * 10000000);
+
+            // Find the 2M cycle that contains this band
+            const cycle = Math.floor(bandMinNorthing / 2000000);
+            let northing = cycle * 2000000 + baseNorthing + northing100k;
+
+            // Adjust if the row letter cycle wrapped
+            // The row letters repeat every 2,000,000m of northing
+            // We need to check if our calculated northing is in the right band
+            let result = utmToLatLon(zone, easting, northing, hemisphere);
+
+            // Verify the result is in the right latitude band
+            const resultBand = getLatitudeBand(result.lat);
+            if (resultBand !== band) {
+                // Try next or previous 2M cycle
+                const altNorthing = northing + 2000000;
+                const altResult = utmToLatLon(zone, easting, altNorthing, hemisphere);
+                if (getLatitudeBand(altResult.lat) === band) {
+                    return altResult;
+                }
+
+                const altNorthing2 = northing - 2000000;
+                const altResult2 = utmToLatLon(zone, easting, altNorthing2, hemisphere);
+                if (getLatitudeBand(altResult2.lat) === band) {
+                    return altResult2;
+                }
+            }
+
+            return result;
+        }
+
+        // Parse DMS (Degrees Minutes Seconds) format
+        function parseDMS(dmsStr) {
+            // Various DMS formats:
+            // 24°08'51.8"N 120°40'25.0"E
+            // 24 08 51.8 N 120 40 25.0 E
+            // 24° 8' 51.8" N, 120° 40' 25.0" E
+            // N24°08'51.8" E120°40'25.0"
+
+            const str = dmsStr.trim();
+
+            // Pattern for one coordinate: degrees, minutes, seconds, direction
+            const dmsPattern = /([NSEW])?[:\s]*(-?\d+)[°\s]+(\d+)['\s]+(\d+\.?\d*)["\s]*([NSEW])?/gi;
+            const matches = [...str.matchAll(dmsPattern)];
+
+            if (matches.length !== 2) {
+                return null;
+            }
+
+            const coords = matches.map(m => {
+                const dir1 = m[1] ? m[1].toUpperCase() : null;
+                const dir2 = m[5] ? m[5].toUpperCase() : null;
+                const dir = dir1 || dir2;
+
+                let degrees = parseFloat(m[2]);
+                const minutes = parseFloat(m[3]);
+                const seconds = parseFloat(m[4]);
+
+                let decimal = Math.abs(degrees) + minutes / 60 + seconds / 3600;
+                if (degrees < 0 || dir === 'S' || dir === 'W') {
+                    decimal = -decimal;
+                }
+
+                return { value: decimal, dir: dir };
+            });
+
+            // Determine which is lat and which is lon
+            let lat, lon;
+            if (coords[0].dir === 'N' || coords[0].dir === 'S') {
+                lat = coords[0].value;
+                lon = coords[1].value;
+            } else if (coords[1].dir === 'N' || coords[1].dir === 'S') {
+                lat = coords[1].value;
+                lon = coords[0].value;
+            } else {
+                // Assume lat, lon order if no clear direction
+                lat = coords[0].value;
+                lon = coords[1].value;
+            }
+
+            if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+                return { lat, lon };
+            }
+            return null;
+        }
+
+        // ============================================
+        // Map Bounds Calculation
+        // ============================================
+
+        // Map parameters (should match tactical_map.py)
+        const HEX_SIZE_M = 250;
+        const GRID_WIDTH = 47;
+        const GRID_HEIGHT = 26;
+
+        function calculateMapBounds(centerLat, centerLon, rotationDeg) {
+            // Calculate map dimensions
+            const size = HEX_SIZE_M / Math.sqrt(3);
+            const colSpacing = 1.5 * size;
+            const rowSpacing = HEX_SIZE_M;
+
+            const widthM = (GRID_WIDTH - 1) * colSpacing + 2 * size;
+            const heightM = GRID_HEIGHT * rowSpacing;
+
+            // When rotated, the bounding box needs to be larger
+            let effectiveRadius;
+            if (rotationDeg !== 0) {
+                // Diagonal of the map
+                effectiveRadius = Math.sqrt(widthM * widthM + heightM * heightM) / 2 + 500;
+            } else {
+                effectiveRadius = Math.max(widthM, heightM) / 2 + 500;
+            }
+
+            // Convert to degrees (approximate)
+            const latDelta = effectiveRadius / 111000;
+            const lonDelta = effectiveRadius / (111000 * Math.cos(centerLat * Math.PI / 180));
+
+            return {
+                minLat: centerLat - latDelta,
+                maxLat: centerLat + latDelta,
+                minLon: centerLon - lonDelta,
+                maxLon: centerLon + lonDelta,
+                widthKm: widthM / 1000,
+                heightKm: heightM / 1000
+            };
+        }
+
+        function getRequiredMGRSSquares(centerLat, centerLon, rotationDeg) {
+            const bounds = calculateMapBounds(centerLat, centerLon, rotationDeg);
+            const squares = new Map(); // Use Map to deduplicate
+
+            // Check corners and edges
+            const checkPoints = [
+                { lat: centerLat, lon: centerLon, isPrimary: true },
+                { lat: bounds.minLat, lon: bounds.minLon },
+                { lat: bounds.minLat, lon: bounds.maxLon },
+                { lat: bounds.maxLat, lon: bounds.minLon },
+                { lat: bounds.maxLat, lon: bounds.maxLon },
+                { lat: bounds.minLat, lon: centerLon },
+                { lat: bounds.maxLat, lon: centerLon },
+                { lat: centerLat, lon: bounds.minLon },
+                { lat: centerLat, lon: bounds.maxLon },
+            ];
+
+            for (const point of checkPoints) {
+                try {
+                    const mgrs = latLonToMGRS(point.lat, point.lon);
+                    const key = mgrs.path;
+                    if (!squares.has(key)) {
+                        squares.set(key, {
+                            ...mgrs,
+                            isPrimary: point.isPrimary || false
+                        });
+                    } else if (point.isPrimary) {
+                        squares.get(key).isPrimary = true;
+                    }
+                } catch (e) {
+                    console.warn('MGRS calculation failed for point:', point, e);
+                }
+            }
+
+            return Array.from(squares.values());
+        }
+
+        // ============================================
+        // Configuration State
+        // ============================================
+
+        const state = {
+            centerLat: 24.1477,
+            centerLon: 120.6736,
+            rotation: 0,
+            region: '', // Auto-detect by default
+            mapName: 'tactical_map',
+            shiftNorth: 0,
+            shiftEast: 0,
+            requiredSquares: [],
+            availableRegions: []
+        };
+
+        // Known available regions (will be populated)
+        // In a real app, this could be loaded from a server or local file
+        const KNOWN_REGIONS = [
+            { path: '51R/TG', name: 'Taichung Area' },
+            { path: '51R/UH', name: 'Loudong/Yilan Area' },
+            { path: 'taiwan', name: 'Taiwan (Legacy)' },
+        ];
+
+        // Approximate meters per degree
+        const METERS_PER_DEG_LAT = 110574;
+        const METERS_PER_DEG_LON = 101320;
+
+        // ============================================
+        // UI Functions
+        // ============================================
+
+        function updateMGRSDisplay() {
+            state.requiredSquares = getRequiredMGRSSquares(
+                state.centerLat,
+                state.centerLon,
+                state.rotation
+            );
+
+            const container = document.getElementById('mgrsSquares');
+            const downloadSection = document.getElementById('downloadSection');
+            const downloadCommands = document.getElementById('downloadCommands');
+
+            let html = '';
+            let missingSquares = [];
+
+            for (const sq of state.requiredSquares) {
+                const isAvailable = KNOWN_REGIONS.some(r => r.path === sq.path);
+                const statusClass = isAvailable ? 'available' : 'missing';
+                const primaryClass = sq.isPrimary ? 'primary' : '';
+                const icon = isAvailable ? '&#10003;' : '&#9888;';
+                const label = sq.isPrimary ? '(center)' : '';
+
+                html += `
+                    <div class="mgrs-square ${statusClass} ${primaryClass}">
+                        <span class="icon">${icon}</span>
+                        <span>${sq.full}</span>
+                        <span class="label">${label}</span>
+                    </div>
+                `;
+
+                if (!isAvailable) {
+                    missingSquares.push(sq);
+                }
+            }
+
+            container.innerHTML = html;
+
+            // Show download commands if there are missing squares
+            if (missingSquares.length > 0) {
+                downloadSection.classList.add('visible');
+                const commands = missingSquares.map(sq =>
+                    `python download_mgrs_data.py "${sq.full}"`
+                ).join('\n');
+                downloadCommands.textContent = commands;
+            } else {
+                downloadSection.classList.remove('visible');
+            }
+
+            // Update region in state (use primary square)
+            const primarySquare = state.requiredSquares.find(sq => sq.isPrimary);
+            if (primarySquare && !state.region) {
+                // Only auto-set if not manually selected
+                state.autoRegion = primarySquare.path;
+            }
+        }
+
+        function updateDisplay() {
+            updateMGRSDisplay();
+
+            const display = document.getElementById('configDisplay');
+            const effectiveRegion = state.region || state.autoRegion || 'auto-detect';
+
+            const shiftInfo = (state.shiftNorth !== 0 || state.shiftEast !== 0)
+                ? `\n<span class="label">Total Shift:</span> <span class="value">${formatShift(state.shiftNorth, 'N', 'S')}, ${formatShift(state.shiftEast, 'E', 'W')}</span>`
+                : '';
+
+            display.innerHTML = `
+<span class="label">Center:</span> <span class="value coords">${state.centerLat.toFixed(6)}&deg;N, ${state.centerLon.toFixed(6)}&deg;E</span>
+<span class="label">Rotation:</span> <span class="value">${state.rotation}&deg; ${state.rotation >= 0 ? 'clockwise' : 'counter-clockwise'}</span>
+<span class="label">Region:</span> <span class="value">${effectiveRegion}</span>
+<span class="label">Map Name:</span> <span class="value">${state.mapName}</span>${shiftInfo}
+            `.trim();
+        }
+
+        function formatShift(meters, posDir, negDir) {
+            if (meters === 0) return '0m';
+            const dir = meters > 0 ? posDir : negDir;
+            const abs = Math.abs(meters);
+            if (abs >= 1000) {
+                return `${(abs/1000).toFixed(1)}km ${dir}`;
+            }
+            return `${abs}m ${dir}`;
+        }
+
+        function getShiftDistance() {
+            const selected = document.querySelector('input[name="shiftDist"]:checked');
+            return selected ? parseInt(selected.value) : 1000;
+        }
+
+        function shift(direction) {
+            const distance = getShiftDistance();
+
+            switch(direction) {
+                case 'N':
+                    state.shiftNorth += distance;
+                    state.centerLat += distance / METERS_PER_DEG_LAT;
+                    break;
+                case 'S':
+                    state.shiftNorth -= distance;
+                    state.centerLat -= distance / METERS_PER_DEG_LAT;
+                    break;
+                case 'E':
+                    state.shiftEast += distance;
+                    state.centerLon += distance / METERS_PER_DEG_LON;
+                    break;
+                case 'W':
+                    state.shiftEast -= distance;
+                    state.centerLon -= distance / METERS_PER_DEG_LON;
+                    break;
+            }
+
+            document.getElementById('centerLat').value = state.centerLat.toFixed(6);
+            document.getElementById('centerLon').value = state.centerLon.toFixed(6);
+
+            updateDisplay();
+        }
+
+        function saveConfig() {
+            const effectiveRegion = state.region || state.autoRegion;
+
+            if (!effectiveRegion) {
+                showStatus('Cannot determine region. Please enter valid coordinates or select a region.', 'warning');
+                return;
+            }
+
+            const config = {
+                name: state.mapName,
+                center_lat: state.centerLat,
+                center_lon: state.centerLon,
+                region: effectiveRegion,
+                rotation_deg: state.rotation
+            };
+
+            const jsonStr = JSON.stringify(config, null, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'map_config.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            showStatus('Config saved! Move map_config.json to your project folder and run: python tactical_map.py', 'success');
+        }
+
+        function generateCommand() {
+            const effectiveRegion = state.region || state.autoRegion;
+
+            const pythonConfig = `# Configuration for tactical map generation
+# Generated by map_config.html
+
+config = MapConfig(
+    name="${state.mapName}",
+    center_lat=${state.centerLat.toFixed(6)},
+    center_lon=${state.centerLon.toFixed(6)},
+    region="${effectiveRegion}",
+    rotation_deg=${state.rotation},
+)
+
+# Required MGRS squares: ${state.requiredSquares.map(sq => sq.full).join(', ')}
+`;
+
+            const output = document.getElementById('commandOutput');
+            output.textContent = pythonConfig;
+            output.classList.add('visible');
+            document.getElementById('copyBtn').style.display = 'block';
+
+            showStatus('Configuration generated! Copy and paste into tactical_map.py main() function.', 'info');
+        }
+
+        function copyCommand() {
+            const output = document.getElementById('commandOutput');
+            navigator.clipboard.writeText(output.textContent).then(() => {
+                showStatus('Copied to clipboard!', 'success');
+            });
+        }
+
+        function copyDownloadCommands() {
+            const commands = document.getElementById('downloadCommands').textContent;
+            navigator.clipboard.writeText(commands).then(() => {
+                showStatus('Download commands copied to clipboard!', 'success');
+            });
+        }
+
+        function resetToDefaults() {
+            state.centerLat = 24.1477;
+            state.centerLon = 120.6736;
+            state.rotation = 0;
+            state.region = '';
+            state.autoRegion = '';
+            state.mapName = 'tactical_map';
+            state.shiftNorth = 0;
+            state.shiftEast = 0;
+
+            document.getElementById('coordPaste').value = '';
+            document.getElementById('centerLat').value = state.centerLat;
+            document.getElementById('centerLon').value = state.centerLon;
+            document.getElementById('rotationSlider').value = state.rotation;
+            document.getElementById('rotationValue').textContent = state.rotation;
+            document.getElementById('mapName').value = state.mapName;
+
+            document.getElementById('commandOutput').classList.remove('visible');
+            document.getElementById('copyBtn').style.display = 'none';
+
+            updateDisplay();
+            showStatus('Reset to defaults', 'info');
+        }
+
+        function showStatus(message, type) {
+            const status = document.getElementById('statusMsg');
+            status.textContent = message;
+            status.className = 'status ' + type;
+
+            setTimeout(() => {
+                status.className = 'status';
+            }, 5000);
+        }
+
+        // ============================================
+        // Initialize
+        // ============================================
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // Parse coordinates - supports multiple formats
+            document.getElementById('coordPaste').addEventListener('input', (e) => {
+                const value = e.target.value.trim();
+                if (!value) return;
+
+                let lat, lon;
+                let format = '';
+
+                // 1. Try MGRS format (e.g., "51PTT1234567890" or "51P TT 12345 67890")
+                const mgrsPattern = /^\d{1,2}[C-X]\s*[A-HJ-NP-Z]{2}\s*\d*$/i;
+                if (mgrsPattern.test(value.replace(/\s+/g, ''))) {
+                    const result = mgrsToLatLon(value);
+                    if (result) {
+                        lat = result.lat;
+                        lon = result.lon;
+                        format = 'MGRS';
+                    }
+                }
+
+                // 2. Try DMS format (e.g., "24°08'51.8"N 120°40'25.0"E")
+                if (!format && (value.includes('°') || value.includes("'") || value.includes('"') || /[NSEW]/i.test(value))) {
+                    const result = parseDMS(value);
+                    if (result) {
+                        lat = result.lat;
+                        lon = result.lon;
+                        format = 'DMS';
+                    }
+                }
+
+                // 3. Try decimal degrees (e.g., "24.1477, 120.6736" or "24.1477 120.6736")
+                if (!format) {
+                    const decimalPatterns = [
+                        /^(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)$/,
+                        /^(-?\d+\.?\d*)\s+(-?\d+\.?\d*)$/,
+                    ];
+                    for (const pattern of decimalPatterns) {
+                        const match = value.match(pattern);
+                        if (match) {
+                            lat = parseFloat(match[1]);
+                            lon = parseFloat(match[2]);
+                            if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+                                format = 'Decimal';
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // Apply parsed coordinates
+                if (format && lat !== undefined && lon !== undefined) {
+                    state.centerLat = lat;
+                    state.centerLon = lon;
+                    state.shiftNorth = 0;
+                    state.shiftEast = 0;
+                    state.region = ''; // Reset to auto-detect
+
+                    document.getElementById('centerLat').value = lat.toFixed(6);
+                    document.getElementById('centerLon').value = lon.toFixed(6);
+
+                    updateDisplay();
+                    showStatus(`${format} coordinates parsed: ${lat.toFixed(6)}, ${lon.toFixed(6)}`, 'success');
+                }
+            });
+
+            // Coordinate inputs
+            document.getElementById('centerLat').addEventListener('input', (e) => {
+                state.centerLat = parseFloat(e.target.value) || 0;
+                state.shiftNorth = 0;
+                state.shiftEast = 0;
+                updateDisplay();
+            });
+
+            document.getElementById('centerLon').addEventListener('input', (e) => {
+                state.centerLon = parseFloat(e.target.value) || 0;
+                state.shiftNorth = 0;
+                state.shiftEast = 0;
+                updateDisplay();
+            });
+
+            // Rotation slider
+            document.getElementById('rotationSlider').addEventListener('input', (e) => {
+                state.rotation = parseInt(e.target.value);
+                document.getElementById('rotationValue').textContent = state.rotation;
+                updateDisplay();
+            });
+
+            // Map name
+            document.getElementById('mapName').addEventListener('input', (e) => {
+                state.mapName = e.target.value || 'untitled';
+                updateDisplay();
+            });
+
+            updateDisplay();
+        });
+    </script>
+</body>
+</html>

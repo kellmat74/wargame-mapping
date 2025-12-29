@@ -1,0 +1,21 @@
+# Core GIS
+geopandas>=0.14.0
+shapely>=2.0.0
+pyproj>=3.6.0
+rasterio>=1.3.0
+fiona>=1.9.0
+
+# Data handling
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Rendering
+svgwrite>=1.4.0
+Pillow>=10.0.0
+matplotlib>=3.7.0
+
+# MGRS coordinate conversion
+mgrs>=1.5.0
+
+# Optional: for H3 hex indexing (alternative approach)
+# h3>=3.7.0
