@@ -235,6 +235,15 @@
             cursor: not-allowed;
         }
 
+        .btn-danger {
+            background: #ef4444;
+            color: #fff;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
         /* Command Output */
         .command-output {
             background: #0d1b2a;
@@ -589,6 +598,7 @@
                 <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
                 <button class="btn btn-success" id="generateBtn" onclick="generateMap()">Generate Map</button>
                 <button class="btn btn-secondary" onclick="resetToDefaults()">Reset</button>
+                <button class="btn btn-danger" id="stopServerBtn" onclick="stopServer()" style="display: none;">Stop Server</button>
             </div>
             <div class="region-info" style="margin-top: 15px;" id="serverModeHint">
                 <span id="serverStatus">Checking server...</span>
@@ -1298,12 +1308,36 @@ config = MapConfig(
                     document.getElementById('serverStatus').innerHTML =
                         '<span style="color: #10b981;">Server connected</span> - Click "Generate Map" to create your map';
                     document.getElementById('generateBtn').disabled = false;
+                    document.getElementById('stopServerBtn').style.display = 'inline-block';
                 })
                 .catch(() => {
                     serverAvailable = false;
                     document.getElementById('serverStatus').innerHTML =
                         'To generate maps directly, run: <code style="background: #0d1b2a; padding: 2px 6px; border-radius: 3px;">python map_server.py</code>';
                     document.getElementById('generateBtn').disabled = true;
+                    document.getElementById('stopServerBtn').style.display = 'none';
+                });
+        }
+
+        function stopServer() {
+            if (!confirm('Stop the map generator server?')) {
+                return;
+            }
+
+            fetch('/api/shutdown', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    showStatus('Server stopped. Close this tab or restart with: python map_server.py', 'info');
+                    document.getElementById('serverStatus').innerHTML =
+                        '<span style="color: #ef4444;">Server stopped</span> - Restart with: <code style="background: #0d1b2a; padding: 2px 6px; border-radius: 3px;">python map_server.py</code>';
+                    document.getElementById('generateBtn').disabled = true;
+                    document.getElementById('stopServerBtn').style.display = 'none';
+                    serverAvailable = false;
+                })
+                .catch(error => {
+                    // Server may have already stopped
+                    showStatus('Server stopped', 'info');
+                    serverAvailable = false;
                 });
         }
 

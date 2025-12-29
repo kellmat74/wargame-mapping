@@ -15,6 +15,7 @@ Then open http://localhost:5000 in your browser.
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -288,6 +289,22 @@ def check_data():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/shutdown', methods=['POST'])
+def shutdown():
+    """Shut down the server."""
+    def stop_server():
+        # Give time for response to be sent
+        import time
+        time.sleep(0.5)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    thread = threading.Thread(target=stop_server)
+    thread.daemon = True
+    thread.start()
+
+    return jsonify({'success': True, 'message': 'Server shutting down...'})
 
 
 if __name__ == '__main__':
