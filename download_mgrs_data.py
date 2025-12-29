@@ -642,6 +642,11 @@ def download_mgrs_square(mgrs_square: str) -> None:
             relation["landuse"="reservoir"];
         );""",
 
+        # Coastline (land/sea boundary)
+        "coastline.geojson": """(
+            way["natural"="coastline"];
+        );""",
+
         # Infrastructure
         "railways.geojson": """(
             way["railway"~"rail|light_rail|subway|tram"];

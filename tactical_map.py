@@ -130,6 +130,9 @@ DATA_LINE_HEIGHT_M = 45           # Line spacing in meters
 STREAM_COLOR = "#0066cc"          # Blue for streams/ditches
 STREAM_WIDTH_M = 10               # Stream line width in meters
 
+COASTLINE_COLOR = "#0055aa"       # Darker blue for coastline
+COASTLINE_WIDTH_M = 15            # Coastline width (prominent)
+
 PATH_COLOR = "#666666"            # Dark grey for footpaths
 PATH_WIDTH_M = 2                  # Path line width
 PATH_DASH = "8,4"                 # Dashed pattern
@@ -536,6 +539,11 @@ def classify_terrain(
 
                     if terrain_areas:
                         terrain = max(terrain_areas, key=terrain_areas.get)
+
+        # Ocean detection: if no landcover data and elevation at/below sea level,
+        # this is likely ocean (SRTM shows ~0m for water surfaces)
+        if terrain == "open" and elev <= 1:
+            terrain = "water"
 
         hexes.append(TacticalHex(
             q=q, r=r,
@@ -1078,6 +1086,7 @@ def render_tactical_svg(
     config: MapConfig,
     output_path: Path,
     enhanced_features: dict = None,
+    dem: rasterio.DatasetReader = None,
 ) -> None:
     """Render tactical map to SVG with 1 SVG unit = 1 meter."""
     print("\nRendering SVG...")
@@ -1231,6 +1240,7 @@ def render_tactical_svg(
 
     # Linear features
     layer_streams = dwg.g(id="Streams")
+    layer_coastline = dwg.g(id="Coastline")
     layer_contours_regular = dwg.g(id="Contours_Regular")
     layer_contours_index = dwg.g(id="Contours_Index")
     layer_contour_labels = dwg.g(id="Contour_Labels")
@@ -1335,6 +1345,104 @@ def render_tactical_svg(
                     stroke=stroke_color,
                     stroke_width=stroke_width,
                 ))
+
+    # Render ocean polygon from coastline (elegant approach)
+    # Creates a polygon that follows the actual shoreline and extends to map edges
+    coastline_gdf = enhanced_features.get('coastline') if enhanced_features else None
+    if coastline_gdf is not None and not coastline_gdf.empty and dem is not None:
+        print("  Creating ocean polygon from coastline...")
+        try:
+            from shapely.ops import polygonize, linemerge, unary_union
+            from shapely.geometry import MultiLineString, GeometryCollection
+
+            # Create a large bounding box that extends beyond the map
+            buffer = 2000  # 2km buffer beyond data bounds
+            ocean_bounds = box(
+                config.data_min_x - buffer,
+                config.data_min_y - buffer,
+                config.data_max_x + buffer,
+                config.data_max_y + buffer
+            )
+
+            # Collect all coastline geometries
+            coast_lines = []
+            for _, row in coastline_gdf.iterrows():
+                geom = row.geometry
+                if geom is None:
+                    continue
+                if geom.geom_type == 'LineString':
+                    coast_lines.append(geom)
+                elif geom.geom_type == 'MultiLineString':
+                    coast_lines.extend(list(geom.geoms))
+
+            if coast_lines:
+                # Merge connected coastline segments
+                merged_coast = linemerge(coast_lines)
+
+                # Clip coastline to our bounds
+                clipped_coast = merged_coast.intersection(ocean_bounds)
+
+                if not clipped_coast.is_empty:
+                    # Combine coastline with bounding box edges to create closed polygons
+                    bound_ring = LineString(list(ocean_bounds.exterior.coords))
+
+                    # Union the coastline and boundary
+                    all_lines = [bound_ring]
+                    if clipped_coast.geom_type == 'LineString':
+                        all_lines.append(clipped_coast)
+                    elif clipped_coast.geom_type == 'MultiLineString':
+                        all_lines.extend(list(clipped_coast.geoms))
+                    elif clipped_coast.geom_type == 'GeometryCollection':
+                        for g in clipped_coast.geoms:
+                            if g.geom_type == 'LineString':
+                                all_lines.append(g)
+                            elif g.geom_type == 'MultiLineString':
+                                all_lines.extend(list(g.geoms))
+
+                    # Use polygonize to create polygons from the line network
+                    merged_lines = unary_union(all_lines)
+                    polygons = list(polygonize(merged_lines))
+
+                    print(f"    Polygonize created {len(polygons)} polygon(s)")
+
+                    # Find ocean polygon(s) by checking elevation at centroid
+                    ocean_polys = []
+                    transformer_to_dem = Transformer.from_crs(GRID_CRS, dem.crs, always_xy=True)
+
+                    for poly in polygons:
+                        if not poly.is_valid or poly.is_empty:
+                            continue
+                        # Sample point inside polygon
+                        test_point = poly.representative_point()
+                        dem_x, dem_y = transformer_to_dem.transform(test_point.x, test_point.y)
+                        try:
+                            row_idx, col_idx = dem.index(dem_x, dem_y)
+                            if 0 <= row_idx < dem.height and 0 <= col_idx < dem.width:
+                                elev = dem.read(1)[row_idx, col_idx]
+                                if elev <= 1:  # Sea level or below = ocean
+                                    ocean_polys.append(poly)
+                                    print(f"      Ocean polygon: area={poly.area/1e6:.2f}km², elev={elev}m")
+                        except Exception as e:
+                            pass
+
+                    if ocean_polys:
+                        print(f"    Rendering {len(ocean_polys)} ocean polygon(s)")
+                        water_fill = TERRAIN_COLORS["water"]
+
+                        for ocean_poly in ocean_polys:
+                            coords = list(ocean_poly.exterior.coords)
+                            svg_points = [to_svg(x, y) for x, y in coords]
+                            layer_terrain_water.add(dwg.polygon(
+                                points=svg_points,
+                                fill=water_fill,
+                                stroke="none",
+                            ))
+                    else:
+                        print("    No ocean polygons identified (none at sea level)")
+        except Exception as e:
+            import traceback
+            print(f"    Error creating ocean polygon: {e}")
+            traceback.print_exc()
 
     # === Enhanced Features Rendering ===
     if enhanced_features:
@@ -1474,6 +1582,13 @@ def render_tactical_svg(
             print("  Rendering streams...")
             count = render_linestrings(streams, layer_streams, STREAM_COLOR, STREAM_WIDTH_M)
             print(f"    Rendered {count} streams")
+
+        # Coastline
+        coastline = enhanced_features.get('coastline')
+        if coastline is not None and not coastline.empty:
+            print("  Rendering coastline...")
+            count = render_linestrings(coastline, layer_coastline, COASTLINE_COLOR, COASTLINE_WIDTH_M)
+            print(f"    Rendered {count} coastline segments")
 
         # Tree rows
         tree_rows = enhanced_features.get('tree_rows')
@@ -2302,6 +2417,7 @@ def render_tactical_svg(
         rotated_content.add(layer_farmland)          # Farmland areas
         rotated_content.add(layer_waterways_area)    # Water area polygons
         rotated_content.add(layer_streams)           # Streams/ditches
+        rotated_content.add(layer_coastline)         # Coastline
         rotated_content.add(layer_contours_regular)  # Regular contours
         rotated_content.add(layer_contours_index)    # Index contours
         rotated_content.add(layer_contour_labels)    # Contour elevation labels
@@ -2343,6 +2459,7 @@ def render_tactical_svg(
         master_group.add(layer_farmland)          # Farmland areas
         master_group.add(layer_waterways_area)    # Water area polygons
         master_group.add(layer_streams)           # Streams/ditches
+        master_group.add(layer_coastline)         # Coastline
         master_group.add(layer_contours_regular)  # Regular contours
         master_group.add(layer_contours_index)    # Index contours
         master_group.add(layer_contour_labels)    # Contour elevation labels
@@ -2484,6 +2601,7 @@ def main():
     farmland = load_optional_features(config, "farmland.geojson", "farmland")
     cliffs = load_optional_features(config, "cliffs.geojson", "cliffs")
     waterways_area = load_optional_features(config, "waterways_area.geojson", "waterways_area")
+    coastline = load_optional_features(config, "coastline.geojson", "coastline")
 
     # Download/load high-res reference tiles for the map area
     # Falls back to MGRS-level tiles if high-res download fails
@@ -2512,12 +2630,13 @@ def main():
         'farmland': farmland,
         'cliffs': cliffs,
         'waterways_area': waterways_area,
+        'coastline': coastline,
         'reference_tiles': reference_tiles,
     }
 
     # Render SVG
     svg_path = config.output_path / f"{config.name}_tactical.svg"
-    render_tactical_svg(grid, hexes, contours, roads, buildings, landcover, mgrs_grid, config, svg_path, enhanced_features)
+    render_tactical_svg(grid, hexes, contours, roads, buildings, landcover, mgrs_grid, config, svg_path, enhanced_features, dem)
 
     # Save hex data
     json_path = config.output_path / f"{config.name}_hexdata.json"
