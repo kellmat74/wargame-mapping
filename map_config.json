@@ -1,7 +1,7 @@
 {
-  "name": "Salvacion",
-  "center_lat": 9.972095555457793,
-  "center_lon": 118.787985655253,
+  "name": "tactical_map",
+  "center_lat": 9.97038260862691,
+  "center_lon": 118.78203043614823,
   "region": "50P/PS",
-  "rotation_deg": 0
+  "rotation_deg": 60
 }

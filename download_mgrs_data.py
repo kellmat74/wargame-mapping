@@ -31,7 +31,7 @@ OVERPASS_URL = "https://lz4.overpass-api.de/api/interpreter"
 OPENTOPOGRAPHY_API_KEY = "137877e41e9d540cf80cc3601dc2230a"
 
 # Delay between Overpass API requests (seconds)
-API_DELAY = 2
+API_DELAY = 3  # Increased to be gentler on the API
 
 
 def parse_mgrs_square(square_str: str) -> Tuple[str, str]:
@@ -169,11 +169,140 @@ def download_osm_chunk(
     return response.json().get("elements", [])
 
 
+def count_osm_features(
+    bounds: Tuple[float, float, float, float],
+    query_body: str
+) -> int:
+    """
+    Count features in an OSM area using Overpass API count query.
+
+    Args:
+        bounds: (min_lon, min_lat, max_lon, max_lat)
+        query_body: The Overpass query body (elements to count)
+
+    Returns:
+        Total count of features
+    """
+    min_lon, min_lat, max_lon, max_lat = bounds
+    bbox = f"{min_lat},{min_lon},{max_lat},{max_lon}"
+
+    # Use [out:json][count] to just get counts without data
+    query = f"""[out:json][timeout:300];
+{query_body.replace('{{bbox}}', bbox)}
+out count;"""
+
+    time.sleep(API_DELAY)
+
+    try:
+        response = requests.post(
+            OVERPASS_URL,
+            data={"data": query},
+            timeout=300
+        )
+
+        if response.status_code == 429:
+            print(f"  Rate limited, waiting 60 seconds...")
+            time.sleep(60)
+            response = requests.post(
+                OVERPASS_URL,
+                data={"data": query},
+                timeout=300
+            )
+
+        if response.status_code != 200:
+            return -1  # Unknown count
+
+        data = response.json()
+        # Count query returns elements with tags containing counts
+        elements = data.get("elements", [])
+        if elements:
+            # Sum all counts from the query
+            total = 0
+            for elem in elements:
+                tags = elem.get("tags", {})
+                total += int(tags.get("total", 0))
+            return total
+        return 0
+    except Exception as e:
+        print(f"  Error counting features: {e}")
+        return -1
+
+
+def verify_downloaded_features(
+    bounds: Tuple[float, float, float, float],
+    output_dir: Path,
+    feature_queries: Dict[str, str]
+) -> Dict[str, dict]:
+    """
+    Verify downloaded features by comparing counts against OSM.
+
+    Returns a dict of {filename: {"downloaded": N, "osm_count": N, "status": "ok"|"mismatch"|"unknown"}}
+    """
+    results = {}
+
+    print("\nVerifying downloaded features against OSM...")
+
+    for filename, query_body in feature_queries.items():
+        filepath = output_dir / filename
+
+        # Count downloaded features
+        downloaded_count = 0
+        if filepath.exists():
+            try:
+                with open(filepath) as f:
+                    data = json.load(f)
+                    features = data.get("features", [])
+                    downloaded_count = len(features)
+            except Exception as e:
+                print(f"  Error reading {filename}: {e}")
+                downloaded_count = -1
+
+        # Count OSM features
+        print(f"  Checking {filename}...", end=" ", flush=True)
+        osm_count = count_osm_features(bounds, query_body)
+
+        # Determine status
+        if osm_count < 0 or downloaded_count < 0:
+            status = "unknown"
+            symbol = "?"
+        elif downloaded_count >= osm_count:
+            status = "ok"
+            symbol = "✓"
+        else:
+            status = "mismatch"
+            symbol = "✗"
+
+        results[filename] = {
+            "downloaded": downloaded_count,
+            "osm_count": osm_count,
+            "status": status
+        }
+
+        print(f"{symbol} downloaded={downloaded_count}, osm={osm_count}")
+
+    # Summary
+    ok_count = sum(1 for r in results.values() if r["status"] == "ok")
+    mismatch_count = sum(1 for r in results.values() if r["status"] == "mismatch")
+    unknown_count = sum(1 for r in results.values() if r["status"] == "unknown")
+
+    print(f"\nVerification summary: {ok_count} OK, {mismatch_count} mismatches, {unknown_count} unknown")
+
+    if mismatch_count > 0:
+        print("\nMismatched files (may need re-download with --force):")
+        for filename, info in results.items():
+            if info["status"] == "mismatch":
+                diff = info["osm_count"] - info["downloaded"]
+                print(f"  {filename}: missing ~{diff} features")
+
+    return results
+
+
 def download_osm_features(
     bounds: Tuple[float, float, float, float],
     output_dir: Path,
     feature_queries: Dict[str, str],
-    chunk_size: float = 0.15  # degrees (~15km chunks for better reliability)
+    chunk_size: float = 0.25,  # degrees (~25km chunks to reduce API calls)
+    force: bool = False  # Force re-download even if file exists
 ) -> None:
     """
     Download OSM features using Overpass API, chunking large areas.
@@ -183,6 +312,7 @@ def download_osm_features(
         output_dir: Directory to save GeoJSON files
         feature_queries: Dict of {filename: overpass_query_body}
         chunk_size: Size of chunks in degrees (default 0.25 = ~25km)
+        force: If True, re-download even if file already exists
     """
     min_lon, min_lat, max_lon, max_lat = bounds
 
@@ -204,7 +334,7 @@ def download_osm_features(
             chunks.append((chunk_min_lon, chunk_min_lat, chunk_max_lon, chunk_max_lat))
 
     # Number of parallel workers (be respectful to the API)
-    MAX_WORKERS = 4
+    MAX_WORKERS = 2  # Reduced from 4 to avoid rate limits
     print_lock = threading.Lock()
 
     def download_chunk_task(args):
@@ -219,11 +349,14 @@ def download_osm_features(
     for filename, query_body in feature_queries.items():
         output_file = output_dir / filename
 
-        if output_file.exists():
+        if output_file.exists() and not force:
             print(f"  {filename} already exists, skipping")
             continue
 
-        print(f"  Downloading {filename}...")
+        if output_file.exists() and force:
+            print(f"  Downloading {filename}... (force re-download)")
+        else:
+            print(f"  Downloading {filename}...")
 
         if total_chunks > 1:
             print(f"    Using {total_chunks} chunks with {MAX_WORKERS} parallel workers...")
@@ -566,8 +699,13 @@ def download_reference_tiles(
     print(f"    Saved {width}x{height} reference image")
 
 
-def download_mgrs_square(mgrs_square: str) -> None:
-    """Download all data for an MGRS 100km square."""
+def download_mgrs_square(mgrs_square: str, force: bool = False) -> None:
+    """Download all data for an MGRS 100km square.
+
+    Args:
+        mgrs_square: MGRS square designator (e.g., "51R TG")
+        force: If True, re-download all features even if files exist
+    """
 
     # Parse the MGRS square
     gzd, square = parse_mgrs_square(mgrs_square)
@@ -687,9 +825,120 @@ def download_mgrs_square(mgrs_square: str) -> None:
             way["landuse"~"farmland|paddy|orchard|vineyard"];
             relation["landuse"~"farmland|paddy|orchard|vineyard"];
         );""",
+
+        # Mangrove and wetlands
+        "mangrove.geojson": """(
+            way["natural"="mangrove"];
+            relation["natural"="mangrove"];
+        );""",
+
+        "wetland.geojson": """(
+            way["natural"~"marsh|swamp|wetland|reedbed|saltmarsh|mud"];
+            relation["natural"~"marsh|swamp|wetland|reedbed|saltmarsh|mud"];
+            way["wetland"];
+            relation["wetland"];
+        );""",
+
+        # Heath and scrubland (beyond what's in landcover)
+        "heath.geojson": """(
+            way["natural"="heath"];
+            relation["natural"="heath"];
+        );""",
+
+        # Rocky terrain
+        "rocky_terrain.geojson": """(
+            way["natural"~"bare_rock|scree|shingle|rock"];
+            relation["natural"~"bare_rock|scree|shingle|rock"];
+        );""",
+
+        # Sand and dunes
+        "sand.geojson": """(
+            way["natural"~"sand|dune"];
+            relation["natural"~"sand|dune"];
+        );""",
+
+        # Military areas
+        "military.geojson": """(
+            way["landuse"="military"];
+            relation["landuse"="military"];
+            way["military"];
+            relation["military"];
+            node["military"];
+        );""",
+
+        # Quarries and mines
+        "quarries.geojson": """(
+            way["landuse"="quarry"];
+            relation["landuse"="quarry"];
+            node["man_made"="mineshaft"];
+            way["man_made"="mineshaft"];
+        );""",
+
+        # Cemeteries
+        "cemeteries.geojson": """(
+            way["landuse"="cemetery"];
+            relation["landuse"="cemetery"];
+            way["amenity"="grave_yard"];
+            relation["amenity"="grave_yard"];
+        );""",
+
+        # Places (settlements)
+        "places.geojson": """(
+            node["place"~"city|town|village|hamlet|isolated_dwelling|locality"];
+        );""",
+
+        # Peaks and terrain features
+        "peaks.geojson": """(
+            node["natural"~"peak|saddle|volcano|hill"];
+        );""",
+
+        # Caves
+        "caves.geojson": """(
+            node["natural"="cave_entrance"];
+            way["natural"="cave_entrance"];
+        );""",
+
+        # Dams
+        "dams.geojson": """(
+            way["waterway"="dam"];
+            node["waterway"="dam"];
+            way["waterway"="weir"];
+        );""",
+
+        # Airfields and aviation
+        "airfields.geojson": """(
+            way["aeroway"~"aerodrome|runway|helipad|taxiway|apron"];
+            node["aeroway"~"aerodrome|helipad"];
+            relation["aeroway"="aerodrome"];
+        );""",
+
+        # Ports and maritime
+        "ports.geojson": """(
+            way["waterway"~"dock|boatyard"];
+            way["man_made"~"pier|breakwater|groyne|quay"];
+            node["man_made"~"pier|lighthouse"];
+            way["landuse"="port"];
+            relation["landuse"="port"];
+            node["seamark:type"];
+        );""",
+
+        # Towers and antennas (observation/communication)
+        "towers.geojson": """(
+            node["man_made"~"tower|mast|communications_tower|antenna"];
+            way["man_made"~"tower|mast"];
+        );""",
+
+        # Fuel and energy infrastructure
+        "fuel_infrastructure.geojson": """(
+            node["amenity"="fuel"];
+            way["man_made"="storage_tank"];
+            way["man_made"="pipeline"];
+            node["power"="plant"];
+            way["power"="plant"];
+        );""",
     }
 
-    download_osm_features(bounds, output_dir, feature_queries)
+    download_osm_features(bounds, output_dir, feature_queries, force=force)
 
     # Rename waterways to streams for compatibility
     waterways_file = output_dir / "waterways.geojson"
@@ -708,19 +957,62 @@ def download_mgrs_square(mgrs_square: str) -> None:
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(__doc__)
-        print("\nAvailable MGRS squares for Taiwan area:")
-        print("  51R TG - Taichung region")
-        print("  51R UH - Loudong/Yilan region")
-        print("  51R TH - Northern Taiwan")
-        print("  51R TF - Southern Taiwan")
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Download map data for an MGRS 100km square",
+        epilog="""Examples:
+  python download_mgrs_data.py "51R TG"        # Download data for Taichung region
+  python download_mgrs_data.py 51RTG --verify  # Verify downloaded data
+  python download_mgrs_data.py 51RTG --force   # Re-download all features
+
+Available MGRS squares for Taiwan area:
+  51R TG - Taichung region
+  51R UH - Loudong/Yilan region
+  51R TH - Northern Taiwan
+  51R TF - Southern Taiwan
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("mgrs_square", nargs="*", help="MGRS square (e.g., '51R TG' or '51RTG')")
+    parser.add_argument("--verify", action="store_true",
+                        help="Verify downloaded data against OSM counts")
+    parser.add_argument("--force", action="store_true",
+                        help="Force re-download of all features (ignore existing files)")
+
+    args = parser.parse_args()
+
+    if not args.mgrs_square:
+        parser.print_help()
         sys.exit(1)
 
-    # Join all arguments in case space-separated
-    mgrs_square = " ".join(sys.argv[1:])
+    mgrs_square = " ".join(args.mgrs_square)
 
-    download_mgrs_square(mgrs_square)
+    if args.verify:
+        # Verification mode - just check counts, don't download
+        gzd, square = parse_mgrs_square(mgrs_square)
+        bounds = get_mgrs_square_bounds(gzd, square)
+        output_dir = DATA_DIR / gzd / square
+
+        if not output_dir.exists():
+            print(f"Error: No data found at {output_dir}")
+            print(f"Run without --verify first to download data.")
+            sys.exit(1)
+
+        # Get the feature queries from the download function
+        # We need to define them here too for verification
+        feature_queries = {
+            "roads.geojson": """(way["highway"];);""",
+            "buildings.geojson": """(way["building"];relation["building"];);""",
+            "landcover.geojson": """(way["natural"~"wood|grassland|scrub|wetland|beach"];way["landuse"~"forest|farmland|meadow|residential|industrial|commercial|orchard|vineyard"];relation["natural"~"wood|grassland"];relation["landuse"~"forest|farmland"];);""",
+            "waterways.geojson": """(way["waterway"~"stream|river|canal|drain|ditch"];);""",
+            "waterways_area.geojson": """(way["natural"="water"];relation["natural"="water"];way["waterway"~"riverbank|dock"];way["landuse"="reservoir"];);""",
+            "coastline.geojson": """(way["natural"="coastline"];);""",
+        }
+
+        verify_downloaded_features(bounds, output_dir, feature_queries)
+    else:
+        download_mgrs_square(mgrs_square, force=args.force)
 
 
 if __name__ == "__main__":

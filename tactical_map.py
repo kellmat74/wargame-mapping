@@ -42,8 +42,19 @@ INDEX_CONTOUR_INTERVAL = 100  # meters between index (bold) contours
 GRID_CRS = "EPSG:3826"  # TWD97 / TM2 Taiwan (meters)
 WGS84 = "EPSG:4326"
 
-# UTM zone for MGRS (Taiwan is in zone 51N)
-UTM_CRS = "EPSG:32651"  # WGS84 / UTM zone 51N
+# UTM zone - will be set dynamically based on map center location
+UTM_CRS = None  # Set by get_utm_crs() based on center coordinates
+
+
+def get_utm_crs(lon: float, lat: float) -> str:
+    """Calculate the correct UTM CRS based on longitude and latitude."""
+    # UTM zones are 6 degrees wide, starting from zone 1 at 180°W
+    zone = int((lon + 180) / 6) + 1
+    # Northern or Southern hemisphere
+    if lat >= 0:
+        return f"EPSG:326{zone:02d}"  # Northern hemisphere
+    else:
+        return f"EPSG:327{zone:02d}"  # Southern hemisphere
 
 # MGRS grid parameters
 MGRS_GRID_INTERVAL = 1000  # 1km grid lines for 1:50,000 scale
@@ -160,6 +171,61 @@ BRIDGE_WIDTH_M = 10               # Bridge width
 FARMLAND_COLOR = "#f5f5dc"        # Beige for farmland
 PADDY_COLOR = "#e6ffe6"           # Light green for rice paddies
 
+# New tactical feature colors
+MANGROVE_COLOR = "#006644"        # Dark green for mangroves
+MANGROVE_OUTLINE = "#004d33"      # Darker outline
+
+WETLAND_COLOR = "#aaddee"         # Light blue-grey for wetlands
+WETLAND_OUTLINE = "#88bbcc"       # Slightly darker outline
+
+HEATH_COLOR = "#c8b464"           # Yellow-brown for heath/scrubland
+HEATH_OUTLINE = "#b0a050"         # Darker outline
+
+ROCKY_COLOR = "#b0a090"           # Grey-brown for rocky terrain
+ROCKY_OUTLINE = "#908070"         # Darker outline
+
+SAND_COLOR = "#fffacd"            # Light yellow for sand/dunes
+SAND_OUTLINE = "#e6e0a0"          # Slightly darker
+
+MILITARY_COLOR = "#ff6666"        # Red for military areas
+MILITARY_OUTLINE = "#cc0000"      # Dark red outline
+MILITARY_WIDTH_M = 3              # Military boundary width
+
+QUARRY_COLOR = "#d0d0d0"          # Light grey for quarries
+QUARRY_OUTLINE = "#999999"        # Grey outline
+
+CEMETERY_COLOR = "#aaccaa"        # Pale green for cemeteries
+CEMETERY_OUTLINE = "#88aa88"      # Green outline
+
+PLACE_LABEL_SIZE_M = 30           # Settlement name font size
+PLACE_LABEL_COLOR = "#333333"     # Dark text for place names
+
+PEAK_MARKER_SIZE_M = 8            # Peak marker size
+PEAK_COLOR = "#8b4513"            # Brown for peak markers
+PEAK_LABEL_SIZE_M = 20            # Peak elevation label size
+
+CAVE_MARKER_SIZE_M = 10           # Cave marker size
+CAVE_COLOR = "#444444"            # Dark grey for caves
+
+DAM_COLOR = "#555555"             # Dark grey for dams
+DAM_WIDTH_M = 6                   # Dam line width
+
+AIRFIELD_COLOR = "#888888"        # Grey for airfield surfaces
+AIRFIELD_OUTLINE = "#666666"      # Darker outline
+RUNWAY_COLOR = "#404040"          # Dark grey for runways
+RUNWAY_WIDTH_M = 20               # Runway width
+
+PORT_COLOR = "#666699"            # Blue-grey for port areas
+PORT_OUTLINE = "#444477"          # Darker outline
+PIER_COLOR = "#8b4513"            # Brown for piers
+PIER_WIDTH_M = 4                  # Pier width
+
+TOWER_MARKER_SIZE_M = 6           # Tower marker size
+TOWER_COLOR = "#333333"           # Dark grey for towers
+
+FUEL_COLOR = "#cc6600"            # Orange for fuel facilities
+FUEL_MARKER_SIZE_M = 8            # Fuel marker size
+
 
 @dataclass
 class TacticalHex:
@@ -196,8 +262,12 @@ class MapConfig:
     data_max_x: float = 0
     data_min_y: float = 0
     data_max_y: float = 0
+    # UTM CRS for this location (computed from center coordinates)
+    utm_crs: str = ""
 
     def __post_init__(self):
+        # Set UTM CRS based on center location
+        self.utm_crs = get_utm_crs(self.center_lon, self.center_lat)
         self.calculate_bounds()
         # Normalize region path (handle "51R TG" -> "51R/TG")
         self.region = self._normalize_region_path(self.region)
@@ -696,11 +766,11 @@ def generate_mgrs_grid(config: MapConfig) -> dict:
         - horizontal_lines: list of (y_utm, x_start, x_end) for E-W lines
         - labels: list of (x, y, text, orientation) for grid labels
     """
-    print("\nGenerating MGRS grid...")
+    print(f"\nGenerating MGRS grid (UTM zone: {config.utm_crs})...")
 
     # Transform data bounds to UTM (uses expanded bounds for rotation)
-    transformer_to_utm = Transformer.from_crs(GRID_CRS, UTM_CRS, always_xy=True)
-    transformer_from_utm = Transformer.from_crs(UTM_CRS, GRID_CRS, always_xy=True)
+    transformer_to_utm = Transformer.from_crs(GRID_CRS, config.utm_crs, always_xy=True)
+    transformer_from_utm = Transformer.from_crs(config.utm_crs, GRID_CRS, always_xy=True)
 
     # Get UTM bounds from expanded data bounds
     utm_min_x, utm_min_y = transformer_to_utm.transform(config.data_min_x, config.data_min_y)
@@ -1133,6 +1203,15 @@ def render_tactical_svg(
     clip_path = dwg.defs.add(dwg.clipPath(id="viewbox-clip"))
     clip_path.add(dwg.rect((bleed_m, bleed_m), (viewbox_width, viewbox_height)))
 
+    # Create an expanded clip-path for rotated reference content (covers rotation corners)
+    if config.rotation_deg != 0:
+        rotation_buffer = max(viewbox_width, viewbox_height) * 0.5
+        clip_path_rotated = dwg.defs.add(dwg.clipPath(id="viewbox-clip-rotated"))
+        clip_path_rotated.add(dwg.rect(
+            (bleed_m - rotation_buffer, bleed_m - rotation_buffer),
+            (viewbox_width + 2 * rotation_buffer, viewbox_height + 2 * rotation_buffer)
+        ))
+
     # Create raster-based patterns for better Affinity Designer compatibility
     # Generate PNG textures and embed as base64
     import base64
@@ -1221,9 +1300,12 @@ def render_tactical_svg(
 
     # === Create layer groups ===
     # Reference layer (hidden by default - for artist reference)
-    # Clip to viewBox to prevent extending beyond document bounds in Affinity
+    # Use expanded clip-path when rotated to fill corners
     layer_reference_tiles = dwg.g(id="Reference_Tiles", visibility="hidden")
-    layer_reference_tiles["clip-path"] = "url(#viewbox-clip)"
+    if config.rotation_deg != 0:
+        layer_reference_tiles["clip-path"] = "url(#viewbox-clip-rotated)"
+    else:
+        layer_reference_tiles["clip-path"] = "url(#viewbox-clip)"
 
     # Base layers
     layer_background = dwg.g(id="Background")
@@ -1237,6 +1319,28 @@ def render_tactical_svg(
     layer_terrain_urban = dwg.g(id="Terrain_Urban")
     layer_farmland = dwg.g(id="Farmland")
     layer_waterways_area = dwg.g(id="Waterways_Area")
+
+    # New terrain polygons
+    layer_mangrove = dwg.g(id="Mangrove")
+    layer_wetland = dwg.g(id="Wetland")
+    layer_heath = dwg.g(id="Heath")
+    layer_rocky = dwg.g(id="Rocky_Terrain")
+    layer_sand = dwg.g(id="Sand")
+    layer_military = dwg.g(id="Military")
+    layer_quarries = dwg.g(id="Quarries")
+    layer_cemeteries = dwg.g(id="Cemeteries")
+    layer_airfields = dwg.g(id="Airfields")
+    layer_ports = dwg.g(id="Ports")
+
+    # Point features
+    layer_places = dwg.g(id="Places")
+    layer_peaks = dwg.g(id="Peaks")
+    layer_caves = dwg.g(id="Caves")
+    layer_towers = dwg.g(id="Towers")
+    layer_fuel = dwg.g(id="Fuel_Infrastructure")
+
+    # Linear features (new)
+    layer_dams = dwg.g(id="Dams")
 
     # Linear features
     layer_streams = dwg.g(id="Streams")
@@ -1271,6 +1375,7 @@ def render_tactical_svg(
     layer_mgrs_grid = dwg.g(id="MGRS_Grid")
     layer_mgrs_labels = dwg.g(id="MGRS_Labels")
     layer_map_data = dwg.g(id="Map_Data")
+    layer_compass = dwg.g(id="Compass_Rose")
     layer_out_of_play_frame = dwg.g(id="Out_Of_Play_Frame")
 
     # Map terrain types to their layer groups
@@ -1352,8 +1457,8 @@ def render_tactical_svg(
     if coastline_gdf is not None and not coastline_gdf.empty and dem is not None:
         print("  Creating ocean polygon from coastline...")
         try:
-            from shapely.ops import polygonize, linemerge, unary_union
-            from shapely.geometry import MultiLineString, GeometryCollection
+            from shapely.ops import polygonize, linemerge, unary_union, snap
+            from shapely.geometry import MultiLineString, GeometryCollection, Point
 
             # Create a large bounding box that extends beyond the map
             buffer = 2000  # 2km buffer beyond data bounds
@@ -1363,6 +1468,7 @@ def render_tactical_svg(
                 config.data_max_x + buffer,
                 config.data_max_y + buffer
             )
+            bound_ring = ocean_bounds.exterior
 
             # Collect all coastline geometries
             coast_lines = []
@@ -1383,47 +1489,114 @@ def render_tactical_svg(
                 clipped_coast = merged_coast.intersection(ocean_bounds)
 
                 if not clipped_coast.is_empty:
-                    # Combine coastline with bounding box edges to create closed polygons
-                    bound_ring = LineString(list(ocean_bounds.exterior.coords))
-
-                    # Union the coastline and boundary
-                    all_lines = [bound_ring]
+                    # Get individual coastline segments
+                    coast_segments = []
                     if clipped_coast.geom_type == 'LineString':
-                        all_lines.append(clipped_coast)
+                        coast_segments.append(clipped_coast)
                     elif clipped_coast.geom_type == 'MultiLineString':
-                        all_lines.extend(list(clipped_coast.geoms))
+                        coast_segments.extend(list(clipped_coast.geoms))
                     elif clipped_coast.geom_type == 'GeometryCollection':
                         for g in clipped_coast.geoms:
                             if g.geom_type == 'LineString':
-                                all_lines.append(g)
+                                coast_segments.append(g)
                             elif g.geom_type == 'MultiLineString':
-                                all_lines.extend(list(g.geoms))
+                                coast_segments.extend(list(g.geoms))
+
+                    # For each coastline segment, extend endpoints to the boundary if needed
+                    extended_segments = []
+                    snap_tolerance = 100  # 100m snap tolerance
+
+                    for seg in coast_segments:
+                        if len(seg.coords) < 2:
+                            continue
+                        coords = list(seg.coords)
+                        start_pt = Point(coords[0])
+                        end_pt = Point(coords[-1])
+
+                        # Check if endpoints are on the boundary (within tolerance)
+                        start_on_boundary = bound_ring.distance(start_pt) < snap_tolerance
+                        end_on_boundary = bound_ring.distance(end_pt) < snap_tolerance
+
+                        # If endpoints aren't on boundary, extend them
+                        new_coords = list(coords)
+                        if not start_on_boundary:
+                            # Project start point onto boundary
+                            nearest_pt = bound_ring.interpolate(bound_ring.project(start_pt))
+                            new_coords.insert(0, (nearest_pt.x, nearest_pt.y))
+                        if not end_on_boundary:
+                            # Project end point onto boundary
+                            nearest_pt = bound_ring.interpolate(bound_ring.project(end_pt))
+                            new_coords.append((nearest_pt.x, nearest_pt.y))
+
+                        extended_segments.append(LineString(new_coords))
+
+                    # Snap all lines to the boundary to ensure proper intersection
+                    all_lines = [LineString(list(bound_ring.coords))]
+                    for seg in extended_segments:
+                        snapped = snap(seg, bound_ring, snap_tolerance)
+                        all_lines.append(snapped)
 
                     # Use polygonize to create polygons from the line network
+                    # unary_union will automatically node the lines at intersections
                     merged_lines = unary_union(all_lines)
                     polygons = list(polygonize(merged_lines))
 
                     print(f"    Polygonize created {len(polygons)} polygon(s)")
+                    print(f"    Extended segments: {len(extended_segments)}, coast segments: {len(coast_segments)}")
 
-                    # Find ocean polygon(s) by checking elevation at centroid
+                    # Find ocean polygon(s) by checking elevation at multiple sample points
                     ocean_polys = []
                     transformer_to_dem = Transformer.from_crs(GRID_CRS, dem.crs, always_xy=True)
+                    dem_data = dem.read(1)
 
-                    for poly in polygons:
+                    for i, poly in enumerate(polygons):
                         if not poly.is_valid or poly.is_empty:
                             continue
-                        # Sample point inside polygon
-                        test_point = poly.representative_point()
-                        dem_x, dem_y = transformer_to_dem.transform(test_point.x, test_point.y)
-                        try:
-                            row_idx, col_idx = dem.index(dem_x, dem_y)
-                            if 0 <= row_idx < dem.height and 0 <= col_idx < dem.width:
-                                elev = dem.read(1)[row_idx, col_idx]
-                                if elev <= 1:  # Sea level or below = ocean
-                                    ocean_polys.append(poly)
-                                    print(f"      Ocean polygon: area={poly.area/1e6:.2f}km², elev={elev}m")
-                        except Exception as e:
-                            pass
+
+                        # Sample multiple points inside polygon for more robust detection
+                        sample_elevations = []
+
+                        # Get representative point and some boundary points
+                        test_points = [poly.representative_point()]
+
+                        # Add centroid if it's inside the polygon
+                        centroid = poly.centroid
+                        if poly.contains(centroid):
+                            test_points.append(centroid)
+
+                        # Sample along a grid within the polygon bounds
+                        bounds = poly.bounds
+                        step = min(bounds[2] - bounds[0], bounds[3] - bounds[1]) / 5
+                        if step > 100:  # At least 100m step
+                            for x in [bounds[0] + step, (bounds[0] + bounds[2]) / 2, bounds[2] - step]:
+                                for y in [bounds[1] + step, (bounds[1] + bounds[3]) / 2, bounds[3] - step]:
+                                    pt = Point(x, y)
+                                    if poly.contains(pt):
+                                        test_points.append(pt)
+
+                        # Check elevation at each sample point
+                        for test_point in test_points:
+                            dem_x, dem_y = transformer_to_dem.transform(test_point.x, test_point.y)
+                            try:
+                                row_idx, col_idx = dem.index(dem_x, dem_y)
+                                if 0 <= row_idx < dem.height and 0 <= col_idx < dem.width:
+                                    elev = dem_data[row_idx, col_idx]
+                                    sample_elevations.append(elev)
+                            except Exception:
+                                pass
+
+                        # Determine if this is ocean based on majority of samples
+                        if sample_elevations:
+                            ocean_samples = sum(1 for e in sample_elevations if e <= 1)
+                            avg_elev = sum(sample_elevations) / len(sample_elevations)
+                            is_ocean = ocean_samples > len(sample_elevations) / 2
+
+                            print(f"      Polygon {i}: area={poly.area/1e6:.2f}km², "
+                                  f"samples={len(sample_elevations)}, ocean_samples={ocean_samples}, "
+                                  f"avg_elev={avg_elev:.1f}m, is_ocean={is_ocean}")
+
+                            if is_ocean:
+                                ocean_polys.append(poly)
 
                     if ocean_polys:
                         print(f"    Rendering {len(ocean_polys)} ocean polygon(s)")
@@ -1680,6 +1853,306 @@ def render_tactical_svg(
                     ))
                     count += 1
             print(f"    Rendered {count} bridges")
+
+        # Render new tactical features
+        # Mangrove areas
+        mangrove = enhanced_features.get('mangrove')
+        if mangrove is not None and not mangrove.empty:
+            print("  Rendering mangrove...")
+            count = render_polygons(mangrove, layer_mangrove, MANGROVE_COLOR,
+                                   stroke_color=MANGROVE_OUTLINE, stroke_width=1)
+            print(f"    Rendered {count} mangrove areas")
+
+        # Wetlands
+        wetland = enhanced_features.get('wetland')
+        if wetland is not None and not wetland.empty:
+            print("  Rendering wetland...")
+            count = render_polygons(wetland, layer_wetland, WETLAND_COLOR,
+                                   stroke_color=WETLAND_OUTLINE, stroke_width=1)
+            print(f"    Rendered {count} wetland areas")
+
+        # Heath/scrubland
+        heath = enhanced_features.get('heath')
+        if heath is not None and not heath.empty:
+            print("  Rendering heath...")
+            count = render_polygons(heath, layer_heath, HEATH_COLOR,
+                                   stroke_color=HEATH_OUTLINE, stroke_width=1)
+            print(f"    Rendered {count} heath areas")
+
+        # Rocky terrain
+        rocky = enhanced_features.get('rocky_terrain')
+        if rocky is not None and not rocky.empty:
+            print("  Rendering rocky terrain...")
+            count = render_polygons(rocky, layer_rocky, ROCKY_COLOR,
+                                   stroke_color=ROCKY_OUTLINE, stroke_width=1)
+            print(f"    Rendered {count} rocky areas")
+
+        # Sand/dunes
+        sand = enhanced_features.get('sand')
+        if sand is not None and not sand.empty:
+            print("  Rendering sand...")
+            count = render_polygons(sand, layer_sand, SAND_COLOR,
+                                   stroke_color=SAND_OUTLINE, stroke_width=1)
+            print(f"    Rendered {count} sand areas")
+
+        # Military areas
+        military = enhanced_features.get('military')
+        if military is not None and not military.empty:
+            print("  Rendering military areas...")
+            count = render_polygons(military, layer_military, MILITARY_COLOR,
+                                   stroke_color=MILITARY_OUTLINE, stroke_width=MILITARY_WIDTH_M)
+            print(f"    Rendered {count} military areas")
+
+        # Quarries
+        quarries = enhanced_features.get('quarries')
+        if quarries is not None and not quarries.empty:
+            print("  Rendering quarries...")
+            count = render_polygons(quarries, layer_quarries, QUARRY_COLOR,
+                                   stroke_color=QUARRY_OUTLINE, stroke_width=1)
+            print(f"    Rendered {count} quarries")
+
+        # Cemeteries
+        cemeteries = enhanced_features.get('cemeteries')
+        if cemeteries is not None and not cemeteries.empty:
+            print("  Rendering cemeteries...")
+            count = render_polygons(cemeteries, layer_cemeteries, CEMETERY_COLOR,
+                                   stroke_color=CEMETERY_OUTLINE, stroke_width=1)
+            print(f"    Rendered {count} cemeteries")
+
+        # Airfields
+        airfields = enhanced_features.get('airfields')
+        if airfields is not None and not airfields.empty:
+            print("  Rendering airfields...")
+            poly_count = 0
+            line_count = 0
+            for _, row in airfields.iterrows():
+                geom = row.geometry
+                if geom is None:
+                    continue
+                aeroway_type = row.get('aeroway', '')
+
+                if geom.geom_type in ('Polygon', 'MultiPolygon'):
+                    if geom.geom_type == 'Polygon':
+                        polys = [geom]
+                    else:
+                        polys = list(geom.geoms)
+                    for poly in polys:
+                        coords = list(poly.exterior.coords)
+                        svg_points = [to_svg(x, y) for x, y in coords]
+                        layer_airfields.add(dwg.polygon(
+                            points=svg_points,
+                            fill=AIRFIELD_COLOR if aeroway_type != 'runway' else RUNWAY_COLOR,
+                            stroke=AIRFIELD_OUTLINE,
+                            stroke_width=1,
+                        ))
+                        poly_count += 1
+                elif geom.geom_type == 'LineString':
+                    # Runways as lines
+                    svg_points = [to_svg(x, y) for x, y in geom.coords]
+                    layer_airfields.add(dwg.polyline(
+                        points=svg_points,
+                        stroke=RUNWAY_COLOR,
+                        stroke_width=RUNWAY_WIDTH_M,
+                        fill='none',
+                    ))
+                    line_count += 1
+            print(f"    Rendered {poly_count} airfield polygons, {line_count} runways")
+
+        # Ports
+        ports = enhanced_features.get('ports')
+        if ports is not None and not ports.empty:
+            print("  Rendering ports...")
+            poly_count = 0
+            line_count = 0
+            for _, row in ports.iterrows():
+                geom = row.geometry
+                if geom is None:
+                    continue
+
+                if geom.geom_type in ('Polygon', 'MultiPolygon'):
+                    if geom.geom_type == 'Polygon':
+                        polys = [geom]
+                    else:
+                        polys = list(geom.geoms)
+                    for poly in polys:
+                        coords = list(poly.exterior.coords)
+                        svg_points = [to_svg(x, y) for x, y in coords]
+                        layer_ports.add(dwg.polygon(
+                            points=svg_points,
+                            fill=PORT_COLOR,
+                            stroke=PORT_OUTLINE,
+                            stroke_width=1,
+                        ))
+                        poly_count += 1
+                elif geom.geom_type == 'LineString':
+                    # Piers as lines
+                    svg_points = [to_svg(x, y) for x, y in geom.coords]
+                    layer_ports.add(dwg.polyline(
+                        points=svg_points,
+                        stroke=PIER_COLOR,
+                        stroke_width=PIER_WIDTH_M,
+                        fill='none',
+                    ))
+                    line_count += 1
+            print(f"    Rendered {poly_count} port polygons, {line_count} piers")
+
+        # Dams
+        dams = enhanced_features.get('dams')
+        if dams is not None and not dams.empty:
+            print("  Rendering dams...")
+            count = render_linestrings(dams, layer_dams, DAM_COLOR, DAM_WIDTH_M)
+            print(f"    Rendered {count} dams")
+
+        # Places (settlement names)
+        places = enhanced_features.get('places')
+        if places is not None and not places.empty:
+            print("  Rendering place names...")
+            count = 0
+            for _, row in places.iterrows():
+                geom = row.geometry
+                if geom is None or geom.geom_type != 'Point':
+                    continue
+                name = row.get('name', '')
+                if not name:
+                    continue
+                place_type = row.get('place', 'village')
+                svg_x, svg_y = to_svg(geom.x, geom.y)
+
+                # Scale font size by place importance
+                size_scale = {'city': 1.5, 'town': 1.2, 'village': 1.0, 'hamlet': 0.8}.get(place_type, 0.8)
+                font_size = PLACE_LABEL_SIZE_M * size_scale
+
+                layer_places.add(dwg.text(
+                    name,
+                    insert=(svg_x, svg_y),
+                    text_anchor="middle",
+                    font_size=font_size,
+                    fill=PLACE_LABEL_COLOR,
+                    font_family="sans-serif",
+                    font_weight="bold" if place_type in ('city', 'town') else "normal",
+                ))
+                count += 1
+            print(f"    Rendered {count} place names")
+
+        # Peaks
+        peaks = enhanced_features.get('peaks')
+        if peaks is not None and not peaks.empty:
+            print("  Rendering peaks...")
+            count = 0
+            for _, row in peaks.iterrows():
+                geom = row.geometry
+                if geom is None or geom.geom_type != 'Point':
+                    continue
+                svg_x, svg_y = to_svg(geom.x, geom.y)
+                ele = row.get('ele', '')
+
+                # Triangle marker for peaks
+                half = PEAK_MARKER_SIZE_M / 2
+                points = [
+                    (svg_x, svg_y - half),  # Top
+                    (svg_x - half, svg_y + half),  # Bottom left
+                    (svg_x + half, svg_y + half),  # Bottom right
+                ]
+                layer_peaks.add(dwg.polygon(points=points, fill=PEAK_COLOR, stroke="none"))
+
+                # Add elevation label if available
+                if ele:
+                    try:
+                        ele_val = int(float(ele))
+                        layer_peaks.add(dwg.text(
+                            f"{ele_val}m",
+                            insert=(svg_x + PEAK_MARKER_SIZE_M, svg_y),
+                            font_size=PEAK_LABEL_SIZE_M,
+                            fill=PEAK_COLOR,
+                            font_family="sans-serif",
+                        ))
+                    except:
+                        pass
+                count += 1
+            print(f"    Rendered {count} peaks")
+
+        # Caves
+        caves = enhanced_features.get('caves')
+        if caves is not None and not caves.empty:
+            print("  Rendering caves...")
+            count = 0
+            for _, row in caves.iterrows():
+                geom = row.geometry
+                if geom is None or geom.geom_type != 'Point':
+                    continue
+                svg_x, svg_y = to_svg(geom.x, geom.y)
+
+                # Circle marker for caves
+                layer_caves.add(dwg.circle(
+                    center=(svg_x, svg_y),
+                    r=CAVE_MARKER_SIZE_M / 2,
+                    fill="none",
+                    stroke=CAVE_COLOR,
+                    stroke_width=2,
+                ))
+                count += 1
+            print(f"    Rendered {count} caves")
+
+        # Towers
+        towers = enhanced_features.get('towers')
+        if towers is not None and not towers.empty:
+            print("  Rendering towers...")
+            count = 0
+            for _, row in towers.iterrows():
+                geom = row.geometry
+                if geom is None or geom.geom_type != 'Point':
+                    continue
+                svg_x, svg_y = to_svg(geom.x, geom.y)
+
+                # Square marker for towers
+                half = TOWER_MARKER_SIZE_M / 2
+                layer_towers.add(dwg.rect(
+                    insert=(svg_x - half, svg_y - half),
+                    size=(TOWER_MARKER_SIZE_M, TOWER_MARKER_SIZE_M),
+                    fill=TOWER_COLOR,
+                    stroke="none",
+                ))
+                count += 1
+            print(f"    Rendered {count} towers")
+
+        # Fuel infrastructure
+        fuel = enhanced_features.get('fuel_infrastructure')
+        if fuel is not None and not fuel.empty:
+            print("  Rendering fuel infrastructure...")
+            count = 0
+            for _, row in fuel.iterrows():
+                geom = row.geometry
+                if geom is None:
+                    continue
+
+                if geom.geom_type == 'Point':
+                    svg_x, svg_y = to_svg(geom.x, geom.y)
+                    # Diamond marker for fuel
+                    half = FUEL_MARKER_SIZE_M / 2
+                    points = [
+                        (svg_x, svg_y - half),
+                        (svg_x + half, svg_y),
+                        (svg_x, svg_y + half),
+                        (svg_x - half, svg_y),
+                    ]
+                    layer_fuel.add(dwg.polygon(points=points, fill=FUEL_COLOR, stroke="none"))
+                    count += 1
+                elif geom.geom_type in ('Polygon', 'MultiPolygon'):
+                    if geom.geom_type == 'Polygon':
+                        polys = [geom]
+                    else:
+                        polys = list(geom.geoms)
+                    for poly in polys:
+                        coords = list(poly.exterior.coords)
+                        svg_points = [to_svg(x, y) for x, y in coords]
+                        layer_fuel.add(dwg.polygon(
+                            points=svg_points,
+                            fill=FUEL_COLOR,
+                            stroke="#994400",
+                            stroke_width=1,
+                        ))
+                        count += 1
+            print(f"    Rendered {count} fuel facilities")
 
     # Layer 3: Buildings (unclipped - frame will mask edges)
     if not buildings.empty:
@@ -2048,6 +2521,22 @@ def render_tactical_svg(
             """Check if label position is within viewBox bounds."""
             return label_min_x <= x <= label_max_x and label_min_y <= y <= label_max_y
 
+        # Calculate expanded clipping area for rotation
+        # When content rotates, we need lines to extend beyond the hex boundary
+        # to fill the visible area after rotation
+        if config.rotation_deg != 0:
+            # Expand clipping area to cover diagonal of viewbox
+            rotation_buffer = max(viewbox_width, viewbox_height) * 0.5
+            clip_poly = box(
+                -rotation_buffer,
+                -rotation_buffer,
+                viewbox_width_with_bleed + rotation_buffer,
+                viewbox_height_with_bleed + rotation_buffer
+            )
+        else:
+            # No rotation - clip to hex boundary
+            clip_poly = hex_boundary_poly
+
         # Draw vertical lines (easting lines)
         for line_info in mgrs_grid['vertical_lines']:
             line_geom = LineString([line_info['start'], line_info['end']])
@@ -2059,9 +2548,9 @@ def render_tactical_svg(
             # Convert to SVG coordinates
             svg_points = [to_svg(x, y) for x, y in clipped.coords]
 
-            # Clip the SVG line to the playable area (hex boundary)
+            # Clip the SVG line
             svg_line = LineString(svg_points)
-            clipped_svg = svg_line.intersection(hex_boundary_poly)
+            clipped_svg = svg_line.intersection(clip_poly)
 
             # Render the clipped line(s)
             if not clipped_svg.is_empty:
@@ -2135,9 +2624,9 @@ def render_tactical_svg(
             # Convert to SVG coordinates
             svg_points = [to_svg(x, y) for x, y in clipped.coords]
 
-            # Clip the SVG line to the playable area (hex boundary)
+            # Clip the SVG line
             svg_line = LineString(svg_points)
-            clipped_svg = svg_line.intersection(hex_boundary_poly)
+            clipped_svg = svg_line.intersection(clip_poly)
 
             # Render the clipped line(s)
             if not clipped_svg.is_empty:
@@ -2205,7 +2694,7 @@ def render_tactical_svg(
 
     # Transform corners from projected CRS to WGS84
     transformer_to_wgs84 = Transformer.from_crs(GRID_CRS, WGS84, always_xy=True)
-    transformer_to_utm = Transformer.from_crs(GRID_CRS, UTM_CRS, always_xy=True)
+    transformer_to_utm = Transformer.from_crs(GRID_CRS, config.utm_crs, always_xy=True)
 
     # Calculate corner coordinates
     # When rotated, we need to find what world coordinates are at the visible corners
@@ -2381,6 +2870,87 @@ def render_tactical_svg(
         font_family="monospace",
     ))
 
+    # Layer 10: Compass Rose (in top-right out-of-play area)
+    # Shows true north direction when map is rotated
+    print("  Rendering compass rose...")
+
+    # Position compass in top-right margin area
+    # Use bleed offset + margin width to stay in the out-of-play frame
+    compass_size = HEX_SIZE_M * 0.8  # Slightly smaller than a hex
+    compass_cx = viewbox_width_with_bleed - bleed_m - MARGIN_M / 2  # Center in right margin
+    compass_cy = bleed_m + MARGIN_M / 2 + DATA_LINE_HEIGHT_M * 4  # Below data block
+
+    # Arrow dimensions
+    arrow_length = compass_size * 0.4
+    arrow_width = compass_size * 0.15
+    circle_radius = compass_size * 0.45
+
+    # Create compass group with rotation to show grid north
+    # Arrow should align with MGRS easting lines (which are rotated with the map)
+    compass_group = dwg.g(transform=f"rotate({config.rotation_deg}, {compass_cx}, {compass_cy})")
+
+    # Outer circle
+    layer_compass.add(dwg.circle(
+        center=(compass_cx, compass_cy),
+        r=circle_radius,
+        fill="none",
+        stroke="#cccccc",
+        stroke_width=2,
+    ))
+
+    # North arrow (pointing up) - filled red
+    north_arrow = [
+        (compass_cx, compass_cy - arrow_length),  # Tip
+        (compass_cx - arrow_width / 2, compass_cy),  # Bottom left
+        (compass_cx + arrow_width / 2, compass_cy),  # Bottom right
+    ]
+    compass_group.add(dwg.polygon(
+        points=north_arrow,
+        fill="#cc0000",
+        stroke="#990000",
+        stroke_width=1,
+    ))
+
+    # South arrow (pointing down) - white outline
+    south_arrow = [
+        (compass_cx, compass_cy + arrow_length),  # Tip
+        (compass_cx - arrow_width / 2, compass_cy),  # Top left
+        (compass_cx + arrow_width / 2, compass_cy),  # Top right
+    ]
+    compass_group.add(dwg.polygon(
+        points=south_arrow,
+        fill="#ffffff",
+        stroke="#666666",
+        stroke_width=1,
+    ))
+
+    # Add rotated arrows to compass layer
+    layer_compass.add(compass_group)
+
+    # Add "N" label above the circle (this rotates with the arrow)
+    n_label_group = dwg.g(transform=f"rotate({config.rotation_deg}, {compass_cx}, {compass_cy})")
+    n_label_group.add(dwg.text(
+        "N",
+        insert=(compass_cx, compass_cy - circle_radius - 10),
+        text_anchor="middle",
+        font_size=DATA_FONT_SIZE_M * 1.2,
+        font_weight="bold",
+        fill="#cc0000",
+        font_family="sans-serif",
+    ))
+    layer_compass.add(n_label_group)
+
+    # Add rotation indicator text (stays horizontal)
+    if config.rotation_deg != 0:
+        layer_compass.add(dwg.text(
+            f"{config.rotation_deg}° CW",
+            insert=(compass_cx, compass_cy + circle_radius + DATA_FONT_SIZE_M + 5),
+            text_anchor="middle",
+            font_size=DATA_FONT_SIZE_M * 0.8,
+            fill="#888888",
+            font_family="sans-serif",
+        ))
+
     # === Add all layers to drawing in correct z-order ===
     # Layer order: reference -> terrain -> features -> frame -> grid/labels
     print("  Assembling layers...")
@@ -2388,9 +2958,6 @@ def render_tactical_svg(
     # Create a master group with clipPath to constrain everything to viewBox
     master_group = dwg.g(id="Master_Content")
     master_group["clip-path"] = "url(#viewbox-clip)"
-
-    # Reference tiles at the very bottom (hidden by default for artist reference)
-    master_group.add(layer_reference_tiles)
 
     # Background is always unrotated (fills entire viewBox)
     master_group.add(layer_background)        # Base background
@@ -2404,6 +2971,15 @@ def render_tactical_svg(
         rot_cx = viewbox_width / 2
         rot_cy = viewbox_height / 2
         # SVG rotation: positive = clockwise
+
+        # Reference tiles in their own rotated group at the very bottom (hidden by default)
+        # This is separate from rotated_content so it renders BELOW layer_terrain_open
+        rotated_reference = dwg.g(
+            id="Rotated_Reference",
+            transform=f"rotate({config.rotation_deg}, {rot_cx}, {rot_cy})"
+        )
+        rotated_reference.add(layer_reference_tiles)
+
         rotated_content = dwg.g(
             id="Rotated_Content",
             transform=f"rotate({config.rotation_deg}, {rot_cx}, {rot_cy})"
@@ -2415,9 +2991,19 @@ def render_tactical_svg(
         rotated_content.add(layer_terrain_orchard)   # Orchard polygons
         rotated_content.add(layer_terrain_urban)     # Urban polygons
         rotated_content.add(layer_farmland)          # Farmland areas
+        # New terrain-like features
+        rotated_content.add(layer_mangrove)          # Mangrove areas
+        rotated_content.add(layer_wetland)           # Wetland areas
+        rotated_content.add(layer_heath)             # Heath/scrubland
+        rotated_content.add(layer_rocky)             # Rocky terrain
+        rotated_content.add(layer_sand)              # Sandy areas
+        rotated_content.add(layer_quarries)          # Quarries
+        rotated_content.add(layer_cemeteries)        # Cemeteries
+        rotated_content.add(layer_military)          # Military areas
         rotated_content.add(layer_waterways_area)    # Water area polygons
         rotated_content.add(layer_streams)           # Streams/ditches
         rotated_content.add(layer_coastline)         # Coastline
+        rotated_content.add(layer_dams)              # Dams
         rotated_content.add(layer_contours_regular)  # Regular contours
         rotated_content.add(layer_contours_index)    # Index contours
         rotated_content.add(layer_contour_labels)    # Contour elevation labels
@@ -2427,6 +3013,9 @@ def render_tactical_svg(
         rotated_content.add(layer_powerlines)        # Power lines
         rotated_content.add(layer_railways)          # Railways
         rotated_content.add(layer_paths)             # Footpaths/cycleways
+        # Infrastructure areas
+        rotated_content.add(layer_airfields)         # Airfields/runways
+        rotated_content.add(layer_ports)             # Ports/docks
         # Road layers (bottom to top by importance)
         rotated_content.add(layer_roads_service)     # Service roads
         rotated_content.add(layer_roads_residential) # Residential roads
@@ -2436,7 +3025,15 @@ def render_tactical_svg(
         rotated_content.add(layer_roads_highway)     # Highways
         rotated_content.add(layer_bridges)           # Bridges
         rotated_content.add(layer_buildings)         # Building footprints
+        # Point features
+        rotated_content.add(layer_towers)            # Towers/masts
+        rotated_content.add(layer_fuel)              # Fuel infrastructure
+        rotated_content.add(layer_caves)             # Cave entrances
+        rotated_content.add(layer_peaks)             # Peaks/summits
+        rotated_content.add(layer_places)            # Place labels
         rotated_content.add(layer_mgrs_grid)         # MGRS grid (real-world coords)
+        # Reference tiles at very bottom (hidden, for artist reference)
+        master_group.add(rotated_reference)
         # Base open terrain matches hex grid (unrotated)
         master_group.add(layer_terrain_open)
         master_group.add(rotated_content)
@@ -2450,6 +3047,7 @@ def render_tactical_svg(
         master_group.add(layer_mgrs_labels)
     else:
         # Non-rotated layer order
+        master_group.add(layer_reference_tiles)   # Reference tiles (hidden)
         master_group.add(layer_terrain_open)      # Open terrain fill
         master_group.add(layer_terrain_water)     # Water polygons
         master_group.add(layer_terrain_marsh)     # Marsh polygons
@@ -2457,9 +3055,19 @@ def render_tactical_svg(
         master_group.add(layer_terrain_orchard)   # Orchard polygons
         master_group.add(layer_terrain_urban)     # Urban polygons
         master_group.add(layer_farmland)          # Farmland areas
+        # New terrain-like features
+        master_group.add(layer_mangrove)          # Mangrove areas
+        master_group.add(layer_wetland)           # Wetland areas
+        master_group.add(layer_heath)             # Heath/scrubland
+        master_group.add(layer_rocky)             # Rocky terrain
+        master_group.add(layer_sand)              # Sandy areas
+        master_group.add(layer_quarries)          # Quarries
+        master_group.add(layer_cemeteries)        # Cemeteries
+        master_group.add(layer_military)          # Military areas
         master_group.add(layer_waterways_area)    # Water area polygons
         master_group.add(layer_streams)           # Streams/ditches
         master_group.add(layer_coastline)         # Coastline
+        master_group.add(layer_dams)              # Dams
         master_group.add(layer_contours_regular)  # Regular contours
         master_group.add(layer_contours_index)    # Index contours
         master_group.add(layer_contour_labels)    # Contour elevation labels
@@ -2469,6 +3077,9 @@ def render_tactical_svg(
         master_group.add(layer_powerlines)        # Power lines
         master_group.add(layer_railways)          # Railways
         master_group.add(layer_paths)             # Footpaths/cycleways
+        # Infrastructure areas
+        master_group.add(layer_airfields)         # Airfields/runways
+        master_group.add(layer_ports)             # Ports/docks
         # Road layers (bottom to top by importance)
         master_group.add(layer_roads_service)     # Service roads
         master_group.add(layer_roads_residential) # Residential roads
@@ -2478,6 +3089,12 @@ def render_tactical_svg(
         master_group.add(layer_roads_highway)     # Highways
         master_group.add(layer_bridges)           # Bridges
         master_group.add(layer_buildings)         # Building footprints
+        # Point features
+        master_group.add(layer_towers)            # Towers/masts
+        master_group.add(layer_fuel)              # Fuel infrastructure
+        master_group.add(layer_caves)             # Cave entrances
+        master_group.add(layer_peaks)             # Peaks/summits
+        master_group.add(layer_places)            # Place labels
         master_group.add(layer_out_of_play_frame) # Frame masks edges
         master_group.add(layer_hex_grid)          # Hex grid lines
         master_group.add(layer_hex_markers)       # Center circles
@@ -2487,6 +3104,7 @@ def render_tactical_svg(
 
     # Map data block stays horizontal (unrotated) at top
     master_group.add(layer_map_data)          # Map metadata block
+    master_group.add(layer_compass)           # Compass rose
 
     # Add master group to drawing
     dwg.add(master_group)
@@ -2603,6 +3221,24 @@ def main():
     waterways_area = load_optional_features(config, "waterways_area.geojson", "waterways_area")
     coastline = load_optional_features(config, "coastline.geojson", "coastline")
 
+    # Load new features (added for tactical relevance)
+    mangrove = load_optional_features(config, "mangrove.geojson", "mangrove")
+    wetland = load_optional_features(config, "wetland.geojson", "wetland")
+    heath = load_optional_features(config, "heath.geojson", "heath")
+    rocky_terrain = load_optional_features(config, "rocky_terrain.geojson", "rocky_terrain")
+    sand = load_optional_features(config, "sand.geojson", "sand")
+    military = load_optional_features(config, "military.geojson", "military")
+    quarries = load_optional_features(config, "quarries.geojson", "quarries")
+    cemeteries = load_optional_features(config, "cemeteries.geojson", "cemeteries")
+    places = load_optional_features(config, "places.geojson", "places")
+    peaks = load_optional_features(config, "peaks.geojson", "peaks")
+    caves = load_optional_features(config, "caves.geojson", "caves")
+    dams = load_optional_features(config, "dams.geojson", "dams")
+    airfields = load_optional_features(config, "airfields.geojson", "airfields")
+    ports = load_optional_features(config, "ports.geojson", "ports")
+    towers = load_optional_features(config, "towers.geojson", "towers")
+    fuel_infrastructure = load_optional_features(config, "fuel_infrastructure.geojson", "fuel_infrastructure")
+
     # Download/load high-res reference tiles for the map area
     # Falls back to MGRS-level tiles if high-res download fails
     reference_tiles = download_highres_reference_tiles(config)
@@ -2632,6 +3268,23 @@ def main():
         'waterways_area': waterways_area,
         'coastline': coastline,
         'reference_tiles': reference_tiles,
+        # New tactical features
+        'mangrove': mangrove,
+        'wetland': wetland,
+        'heath': heath,
+        'rocky_terrain': rocky_terrain,
+        'sand': sand,
+        'military': military,
+        'quarries': quarries,
+        'cemeteries': cemeteries,
+        'places': places,
+        'peaks': peaks,
+        'caves': caves,
+        'dams': dams,
+        'airfields': airfields,
+        'ports': ports,
+        'towers': towers,
+        'fuel_infrastructure': fuel_infrastructure,
     }
 
     # Render SVG
