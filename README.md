@@ -38,9 +38,15 @@ setup.bat
 venv\Scripts\activate.bat
 ```
 
-### 2. Configure Your Map
+### 2. Start the Web Server
+```bash
+python map_server.py
+```
+This opens http://localhost:8080 in your browser.
 
-Open `map_config.html` in your web browser to configure:
+### 3. Configure Your Map
+
+In the web interface, configure:
 - **Map Name**: Used for output filenames
 - **Center Location**: Paste coordinates in any format:
   - Decimal: `24.1477, 120.6736` (Google Maps format)
@@ -48,37 +54,18 @@ Open `map_config.html` in your web browser to configure:
   - MGRS: `51PTT1234567890` or `51P TT 12345 67890`
 - **Rotation**: Rotate the map (0° = North is up)
 
-The tool auto-detects which MGRS data regions are needed.
-
-### 3. Download Geographic Data
-
-Download data for your region (shown in the config tool):
-```bash
-python download_mgrs_data.py "51P TT"
-```
-
-For maps spanning multiple MGRS squares:
-```bash
-python download_mgrs_data.py "51P TT"
-python download_mgrs_data.py "51P TS"
-```
-
 ### 4. Generate the Map
 
-**Option A: Web Server (Recommended)**
+Click **Generate Map**. The tool will:
+1. Automatically download geographic data if not present
+2. Generate the tactical map with live progress output
 
-Start the web server for an integrated experience:
+**Alternative: Command Line**
+
+You can also run generation manually:
 ```bash
-python map_server.py
-```
-
-This opens http://localhost:8080 in your browser. Click "Generate Map" to create your map directly from the web interface with live progress output.
-
-**Option B: Command Line**
-
-Save `map_config.json` from the config tool, then run:
-```bash
-python tactical_map.py
+python download_mgrs_data.py "51P TT"  # Download data
+python tactical_map.py                   # Generate map
 ```
 
 ### 5. Find Your Output

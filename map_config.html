@@ -470,24 +470,14 @@
                         <li>Adjust <strong>Rotation</strong> if needed (0° = North is up)</li>
                     </ul>
 
-                    <p style="margin: 0 0 15px 0;"><strong style="color: #00d4ff;">Step 2: Check Data Region</strong></p>
+                    <p style="margin: 0 0 15px 0;"><strong style="color: #00d4ff;">Step 2: Generate</strong></p>
                     <ul style="margin: 0 0 15px 0; padding-left: 20px;">
-                        <li>The tool auto-detects which MGRS region(s) your map needs</li>
-                        <li>If data is missing, copy the download commands shown below</li>
+                        <li>Click <strong>Generate Map</strong> to create your map</li>
+                        <li>Data is downloaded automatically if not present</li>
+                        <li>Progress is shown in real-time below the button</li>
                     </ul>
 
-                    <p style="margin: 0 0 15px 0;"><strong style="color: #00d4ff;">Step 3: Save &amp; Generate</strong></p>
-                    <ol style="margin: 0 0 15px 0; padding-left: 20px;">
-                        <li>Click <strong>Save Configuration</strong> to write <code style="background: #1a1a2e; padding: 2px 6px; border-radius: 3px;">map_config.json</code></li>
-                        <li>If needed, run the download command in Terminal:
-                            <code style="display: block; background: #1a1a2e; padding: 8px; border-radius: 3px; margin: 5px 0;">python download_mgrs_data.py 51P TT</code>
-                        </li>
-                        <li>Generate the map:
-                            <code style="display: block; background: #1a1a2e; padding: 8px; border-radius: 3px; margin: 5px 0;">python tactical_map.py</code>
-                        </li>
-                    </ol>
-
-                    <p style="margin: 0 0 10px 0;"><strong style="color: #00d4ff;">Step 4: Find Your Output</strong></p>
+                    <p style="margin: 0 0 10px 0;"><strong style="color: #00d4ff;">Step 3: Find Your Output</strong></p>
                     <ul style="margin: 0; padding-left: 20px;">
                         <li>SVG map: <code style="background: #1a1a2e; padding: 2px 6px; border-radius: 3px;">output/{region}/{name}/{name}_tactical.svg</code></li>
                         <li>Hex data: <code style="background: #1a1a2e; padding: 2px 6px; border-radius: 3px;">output/{region}/{name}/{name}_hexdata.json</code></li>
@@ -592,9 +582,9 @@
             </div>
         </div>
 
-        <!-- Step 3: Save & Generate -->
+        <!-- Step 2: Generate -->
         <div class="panel">
-            <h2>Step 3: Save &amp; Generate</h2>
+            <h2>Step 2: Generate</h2>
             <div class="button-row">
                 <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
                 <button class="btn btn-success" id="generateBtn" onclick="generateMap()">Generate Map</button>

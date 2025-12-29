@@ -77,6 +77,9 @@ def generate_map():
     except Exception as e:
         return jsonify({'error': f'Failed to save config: {e}'}), 500
 
+    # Get region from config
+    region = config.get('region', '') if config else ''
+
     # Reset status
     with status_lock:
         generation_status = {
@@ -93,46 +96,106 @@ def generate_map():
         except queue.Empty:
             break
 
-    # Start generation in background thread
-    thread = threading.Thread(target=run_generation)
+    # Start generation in background thread (with region for auto-download)
+    thread = threading.Thread(target=run_generation, args=(region,))
     thread.daemon = True
     thread.start()
 
     return jsonify({'success': True, 'message': 'Generation started'})
 
 
-def run_generation():
-    """Run tactical_map.py and capture output."""
+def check_data_exists(region):
+    """Check if required MGRS data exists for a region."""
+    if not region:
+        return False, "No region specified"
+
+    # Parse region (e.g., "51P/TT" or "51P TT")
+    region_clean = region.replace(' ', '/').replace('//', '/')
+    data_path = Path(__file__).parent / 'data' / region_clean
+
+    # Check for required files
+    required_files = ['roads.geojson', 'buildings.geojson', 'landuse.geojson']
+
+    if not data_path.exists():
+        return False, f"Data directory not found: {data_path}"
+
+    missing = [f for f in required_files if not (data_path / f).exists()]
+    if missing:
+        return False, f"Missing files: {', '.join(missing)}"
+
+    return True, "Data exists"
+
+
+def run_subprocess(cmd, description):
+    """Run a subprocess and stream output to the queue."""
+    output_queue.put(f">>> {description}")
+
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        cwd=str(Path(__file__).parent)
+    )
+
+    for line in iter(process.stdout.readline, ''):
+        line = line.rstrip()
+        if line:
+            with status_lock:
+                generation_status['output'].append(line)
+            output_queue.put(line)
+
+    process.wait()
+    return process.returncode
+
+
+def run_generation(region):
+    """Download data if needed, then run tactical_map.py."""
     global generation_status
 
     try:
-        script_path = Path(__file__).parent / 'tactical_map.py'
+        base_path = Path(__file__).parent
 
-        # Use the same Python interpreter
-        process = subprocess.Popen(
-            [sys.executable, str(script_path)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            cwd=str(Path(__file__).parent)
-        )
+        # Check if data exists, download if not
+        data_exists, msg = check_data_exists(region)
+        if not data_exists:
+            output_queue.put(f"Data not found for region '{region}' - downloading...")
 
-        # Read output line by line
-        for line in iter(process.stdout.readline, ''):
-            line = line.rstrip()
-            if line:
+            # Run download script
+            download_script = base_path / 'download_mgrs_data.py'
+            # Convert region format: "51P/TT" -> "51P TT"
+            region_arg = region.replace('/', ' ')
+
+            returncode = run_subprocess(
+                [sys.executable, str(download_script), region_arg],
+                f"Downloading data for {region_arg}..."
+            )
+
+            if returncode != 0:
                 with status_lock:
-                    generation_status['output'].append(line)
-                output_queue.put(line)
+                    generation_status['running'] = False
+                    generation_status['error'] = f'Data download failed with code {returncode}'
+                    generation_status['complete'] = True
+                output_queue.put(None)
+                return
 
-        process.wait()
+            output_queue.put("Download complete. Starting map generation...")
+        else:
+            output_queue.put(f"Data found for region '{region}'")
+
+        # Run map generation
+        script_path = base_path / 'tactical_map.py'
+        returncode = run_subprocess(
+            [sys.executable, str(script_path)],
+            "Generating tactical map..."
+        )
 
         with status_lock:
             generation_status['running'] = False
             generation_status['complete'] = True
-            if process.returncode != 0:
-                generation_status['error'] = f'Process exited with code {process.returncode}'
+            if returncode != 0:
+                generation_status['error'] = f'Map generation failed with code {returncode}'
             output_queue.put(None)  # Signal completion
 
     except Exception as e:
