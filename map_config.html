@@ -384,59 +384,15 @@
             gap: 8px;
         }
 
-        .mgrs-square.available {
-            background: rgba(74, 222, 128, 0.1);
-            border: 1px solid #4ade80;
-            color: #4ade80;
-        }
-
-        .mgrs-square.missing {
-            background: rgba(245, 158, 11, 0.1);
-            border: 1px solid #f59e0b;
-            color: #f59e0b;
-        }
-
         .mgrs-square.primary {
             border-width: 2px;
-        }
-
-        .mgrs-square .icon {
-            font-size: 16px;
+            border-color: #00d4ff;
         }
 
         .mgrs-square .label {
             font-size: 10px;
             color: #888;
             margin-left: 5px;
-        }
-
-        /* Download Section */
-        .download-section {
-            margin-top: 15px;
-            padding: 15px;
-            background: rgba(245, 158, 11, 0.05);
-            border: 1px solid #f59e0b;
-            border-radius: 4px;
-            display: none;
-        }
-
-        .download-section.visible {
-            display: block;
-        }
-
-        .download-section h3 {
-            margin: 0 0 10px 0;
-            font-size: 14px;
-            color: #f59e0b;
-        }
-
-        .download-commands {
-            background: #0d1b2a;
-            padding: 10px;
-            border-radius: 4px;
-            font-family: 'Monaco', 'Menlo', monospace;
-            font-size: 12px;
-            color: #4ade80;
         }
 
         /* Existing regions dropdown */
@@ -569,25 +525,16 @@
             </div>
         </div>
 
-        <!-- Step 2: Data Region -->
+        <!-- Data Region Info -->
         <div class="panel">
-            <h2>Step 2: Data Region</h2>
             <div class="mgrs-display" style="margin-top: 0;">
                 <div class="mgrs-title">Required MGRS Squares for Map Coverage</div>
                 <div class="mgrs-squares" id="mgrsSquares">
                     <!-- Populated by JS -->
                 </div>
-            </div>
-
-            <div class="download-section" id="downloadSection">
-                <h3>Missing Data - Download Required</h3>
-                <p style="font-size: 12px; color: #ccc; margin: 0 0 10px 0;">
-                    Run these commands in Terminal to download the missing region data:
-                </p>
-                <div class="download-commands" id="downloadCommands"></div>
-                <button class="btn btn-warning" style="margin-top: 10px;" onclick="copyDownloadCommands()">
-                    Copy Download Commands
-                </button>
+                <div style="font-size: 11px; color: #888; margin-top: 10px;">
+                    Data is downloaded automatically when you click Generate Map
+                </div>
             </div>
         </div>
 
@@ -1082,44 +1029,22 @@
             );
 
             const container = document.getElementById('mgrsSquares');
-            const downloadSection = document.getElementById('downloadSection');
-            const downloadCommands = document.getElementById('downloadCommands');
 
             let html = '';
-            let missingSquares = [];
 
             for (const sq of state.requiredSquares) {
-                const isAvailable = KNOWN_REGIONS.some(r => r.path === sq.path);
-                const statusClass = isAvailable ? 'available' : 'missing';
                 const primaryClass = sq.isPrimary ? 'primary' : '';
-                const icon = isAvailable ? '&#10003;' : '&#9888;';
                 const label = sq.isPrimary ? '(center)' : '';
 
                 html += `
-                    <div class="mgrs-square ${statusClass} ${primaryClass}">
-                        <span class="icon">${icon}</span>
+                    <div class="mgrs-square ${primaryClass}">
                         <span>${sq.full}</span>
                         <span class="label">${label}</span>
                     </div>
                 `;
-
-                if (!isAvailable) {
-                    missingSquares.push(sq);
-                }
             }
 
             container.innerHTML = html;
-
-            // Show download commands if there are missing squares
-            if (missingSquares.length > 0) {
-                downloadSection.classList.add('visible');
-                const commands = missingSquares.map(sq =>
-                    `python download_mgrs_data.py "${sq.full}"`
-                ).join('\n');
-                downloadCommands.textContent = commands;
-            } else {
-                downloadSection.classList.remove('visible');
-            }
 
             // Update region in state (use primary square)
             const primarySquare = state.requiredSquares.find(sq => sq.isPrimary);
@@ -1250,13 +1175,6 @@ config = MapConfig(
             const output = document.getElementById('commandOutput');
             navigator.clipboard.writeText(output.textContent).then(() => {
                 showStatus('Copied to clipboard!', 'success');
-            });
-        }
-
-        function copyDownloadCommands() {
-            const commands = document.getElementById('downloadCommands').textContent;
-            navigator.clipboard.writeText(commands).then(() => {
-                showStatus('Download commands copied to clipboard!', 'success');
             });
         }
 
