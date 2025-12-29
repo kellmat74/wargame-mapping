@@ -384,9 +384,25 @@
             gap: 8px;
         }
 
+        .mgrs-square.available {
+            background: rgba(74, 222, 128, 0.1);
+            border-color: #4ade80;
+            color: #4ade80;
+        }
+
+        .mgrs-square.missing {
+            background: rgba(245, 158, 11, 0.1);
+            border-color: #f59e0b;
+            color: #f59e0b;
+        }
+
         .mgrs-square.primary {
             border-width: 2px;
-            border-color: #00d4ff;
+        }
+
+        .mgrs-square .icon {
+            font-size: 14px;
+            margin-right: 4px;
         }
 
         .mgrs-square .label {
@@ -1030,21 +1046,8 @@
 
             const container = document.getElementById('mgrsSquares');
 
-            let html = '';
-
-            for (const sq of state.requiredSquares) {
-                const primaryClass = sq.isPrimary ? 'primary' : '';
-                const label = sq.isPrimary ? '(center)' : '';
-
-                html += `
-                    <div class="mgrs-square ${primaryClass}">
-                        <span>${sq.full}</span>
-                        <span class="label">${label}</span>
-                    </div>
-                `;
-            }
-
-            container.innerHTML = html;
+            // Initial render without status (will update async)
+            renderMGRSSquares(container, {});
 
             // Update region in state (use primary square)
             const primarySquare = state.requiredSquares.find(sq => sq.isPrimary);
@@ -1052,6 +1055,63 @@
                 // Only auto-set if not manually selected
                 state.autoRegion = primarySquare.path;
             }
+
+            // Check data status for each square (if server is available)
+            if (serverAvailable) {
+                checkDataStatus();
+            }
+        }
+
+        function renderMGRSSquares(container, dataStatus) {
+            let html = '';
+
+            for (const sq of state.requiredSquares) {
+                const primaryClass = sq.isPrimary ? 'primary' : '';
+                const label = sq.isPrimary ? '(center)' : '';
+
+                // Determine status class and icon
+                let statusClass = '';
+                let icon = '';
+                if (dataStatus[sq.path] === true) {
+                    statusClass = 'available';
+                    icon = '<span class="icon">✓</span>';
+                } else if (dataStatus[sq.path] === false) {
+                    statusClass = 'missing';
+                    icon = '<span class="icon">⚠</span>';
+                }
+
+                html += `
+                    <div class="mgrs-square ${statusClass} ${primaryClass}">
+                        ${icon}<span>${sq.full}</span>
+                        <span class="label">${label}</span>
+                    </div>
+                `;
+            }
+
+            container.innerHTML = html;
+        }
+
+        async function checkDataStatus() {
+            const container = document.getElementById('mgrsSquares');
+            const dataStatus = {};
+
+            // Check each required square
+            for (const sq of state.requiredSquares) {
+                try {
+                    const response = await fetch('/api/check-data', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ region: sq.path })
+                    });
+                    const data = await response.json();
+                    dataStatus[sq.path] = data.exists === true;
+                } catch (e) {
+                    // Server not available or error - skip status
+                }
+            }
+
+            // Re-render with status
+            renderMGRSSquares(container, dataStatus);
         }
 
         function updateDisplay() {
