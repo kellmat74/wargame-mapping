@@ -1212,7 +1212,9 @@ def render_tactical_svg(
 
     # === Create layer groups ===
     # Reference layer (hidden by default - for artist reference)
+    # Clip to viewBox to prevent extending beyond document bounds in Affinity
     layer_reference_tiles = dwg.g(id="Reference_Tiles", visibility="hidden")
+    layer_reference_tiles["clip-path"] = "url(#viewbox-clip)"
 
     # Base layers
     layer_background = dwg.g(id="Background")
