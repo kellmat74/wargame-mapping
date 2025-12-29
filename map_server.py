@@ -119,7 +119,7 @@ def check_data_exists(region):
     data_path = Path(__file__).parent / 'data' / region_clean
 
     # Check for required files
-    required_files = ['roads.geojson', 'buildings.geojson', 'landuse.geojson']
+    required_files = ['roads.geojson', 'buildings.geojson', 'landcover.geojson']
 
     if not data_path.exists():
         return False, f"Data directory not found: {data_path}"
@@ -277,7 +277,7 @@ def check_data():
         data_path = Path(__file__).parent / 'data' / region_clean
 
         # Check for required files
-        required_files = ['roads.geojson', 'buildings.geojson', 'landuse.geojson']
+        required_files = ['roads.geojson', 'buildings.geojson', 'landcover.geojson']
         existing = []
         missing = []
 
