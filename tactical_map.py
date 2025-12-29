@@ -127,11 +127,20 @@ HEX_GRID_OPACITY = 0.5            # Hex grid opacity (50%)
 HEX_LABEL_SIZE_M = 25             # Hex label font size in meters
 HEX_MARKER_RADIUS_M = 12          # Hex center circle radius in meters
 
-# Out-of-play margin
-MARGIN_M = 300                    # Margin around playable area in meters
+# Print layout settings (fixed document dimensions)
+TRIM_WIDTH_IN = 34.0              # Trim width in inches (final printed width)
+TRIM_HEIGHT_IN = 22.0             # Trim height in inches (final printed height)
+PLAY_MARGIN_TOP_IN = 0.25         # Margin from trim to top hex row (inches)
+PLAY_MARGIN_BOTTOM_IN = 0.25      # Margin from trim to bottom hex row (inches)
+PLAY_MARGIN_LEFT_IN = 0.0         # Margin from trim to left hex points (inches)
+PLAY_MARGIN_RIGHT_IN = 0.0        # Margin from trim to right hex points (inches)
+DATA_MARGIN_IN = 1.25             # Margin outside bleed for data elements (inches)
 
 # Print bleed settings
 BLEED_INCHES = 0.125              # Standard bleed for professional printing (1/8")
+
+# Legacy margin (will be calculated dynamically based on scale)
+MARGIN_M = 300                    # Default margin around playable area in meters (recalculated)
 
 # Data block styling (in meters)
 DATA_FONT_SIZE_M = 35             # Data block font size in meters
@@ -1161,55 +1170,99 @@ def render_tactical_svg(
     """Render tactical map to SVG with 1 SVG unit = 1 meter."""
     print("\nRendering SVG...")
 
-    # Map dimensions in meters
-    world_width = config.max_x - config.min_x
-    world_height = config.max_y - config.min_y
+    # === NEW LAYOUT: Fixed 34" x 22" trim with data elements outside bleed ===
 
-    # Total viewBox dimensions including margins (in meters)
-    viewbox_width = world_width + 2 * MARGIN_M
-    viewbox_height = world_height + 2 * MARGIN_M
+    # Hex grid dimensions in meters (at current HEX_SIZE_M)
+    hex_grid_width = config.max_x - config.min_x   # Width of hex grid
+    hex_grid_height = config.max_y - config.min_y  # Height of hex grid
 
-    # Calculate document size to match content aspect ratio exactly
-    # Base height of 22" and calculate width to match
-    doc_height_in = 22.0
-    doc_width_in = doc_height_in * (viewbox_width / viewbox_height)
+    # Play area (where hexes fit) = trim minus top/bottom margins
+    play_width_in = TRIM_WIDTH_IN - PLAY_MARGIN_LEFT_IN - PLAY_MARGIN_RIGHT_IN
+    play_height_in = TRIM_HEIGHT_IN - PLAY_MARGIN_TOP_IN - PLAY_MARGIN_BOTTOM_IN
 
-    # Add bleed to document size
-    doc_width_with_bleed = doc_width_in + 2 * BLEED_INCHES
-    doc_height_with_bleed = doc_height_in + 2 * BLEED_INCHES
+    print(f"  Trim size: {TRIM_WIDTH_IN}\" x {TRIM_HEIGHT_IN}\"")
+    print(f"  Play area: {play_width_in}\" x {play_height_in}\"")
 
-    # Calculate bleed in meters (for viewBox)
-    meters_per_inch = viewbox_height / doc_height_in
-    bleed_m = BLEED_INCHES * meters_per_inch
+    # Calculate scale to fit hex grid into play area (uniform scaling)
+    # We want to maximize fill while keeping hexes undistorted
+    scale_by_width = play_width_in / (hex_grid_width / 25.4)   # meters to inches
+    scale_by_height = play_height_in / (hex_grid_height / 25.4)
 
-    # Expanded viewBox to include bleed area
-    viewbox_width_with_bleed = viewbox_width + 2 * bleed_m
-    viewbox_height_with_bleed = viewbox_height + 2 * bleed_m
+    # Actually, let's calculate meters_per_inch directly
+    # meters_per_inch = hex_grid_dimension_m / play_dimension_in
+    meters_per_inch_by_width = hex_grid_width / play_width_in
+    meters_per_inch_by_height = hex_grid_height / play_height_in
 
-    print(f"  Document size: {doc_width_in:.2f}\" x {doc_height_in:.2f}\" (trim)")
-    print(f"  With {BLEED_INCHES}\" bleed: {doc_width_with_bleed:.2f}\" x {doc_height_with_bleed:.2f}\"")
+    # Use the larger scale (more meters per inch = smaller hexes) to ensure fit
+    meters_per_inch = max(meters_per_inch_by_width, meters_per_inch_by_height)
+
+    # Calculate actual hex grid size in inches at this scale
+    actual_grid_width_in = hex_grid_width / meters_per_inch
+    actual_grid_height_in = hex_grid_height / meters_per_inch
+
+    # Calculate centering offsets (to center hex grid in play area)
+    center_offset_x_in = (play_width_in - actual_grid_width_in) / 2
+    center_offset_y_in = (play_height_in - actual_grid_height_in) / 2
+
+    print(f"  Hex grid: {actual_grid_width_in:.2f}\" x {actual_grid_height_in:.2f}\"")
     print(f"  Scale: 1\" = {meters_per_inch:.1f}m")
+    print(f"  Centering offset: ({center_offset_x_in:.3f}\", {center_offset_y_in:.3f}\")")
 
-    # Create SVG with exact dimensions including bleed
+    # Convert layout dimensions to meters (for SVG viewBox, which uses 1 unit = 1 meter)
+    trim_width_m = TRIM_WIDTH_IN * meters_per_inch
+    trim_height_m = TRIM_HEIGHT_IN * meters_per_inch
+    bleed_m = BLEED_INCHES * meters_per_inch
+    data_margin_m = DATA_MARGIN_IN * meters_per_inch
+    play_margin_top_m = PLAY_MARGIN_TOP_IN * meters_per_inch
+    play_margin_bottom_m = PLAY_MARGIN_BOTTOM_IN * meters_per_inch
+    play_margin_left_m = PLAY_MARGIN_LEFT_IN * meters_per_inch
+    play_margin_right_m = PLAY_MARGIN_RIGHT_IN * meters_per_inch
+    center_offset_x_m = center_offset_x_in * meters_per_inch
+    center_offset_y_m = center_offset_y_in * meters_per_inch
+
+    # viewBox dimensions: trim area only (data elements are outside, not in viewBox)
+    # Actually, we need viewBox to include bleed + data margin for the full document
+    viewbox_width = trim_width_m
+    viewbox_height = trim_height_m
+
+    # Full document dimensions including bleed and data margin
+    doc_width_in = TRIM_WIDTH_IN + 2 * BLEED_INCHES + 2 * DATA_MARGIN_IN
+    doc_height_in = TRIM_HEIGHT_IN + 2 * BLEED_INCHES + 2 * DATA_MARGIN_IN
+    doc_width_m = doc_width_in * meters_per_inch
+    doc_height_m = doc_height_in * meters_per_inch
+
+    # viewBox includes everything (data margin + bleed + trim)
+    viewbox_width_with_bleed = doc_width_m
+    viewbox_height_with_bleed = doc_height_m
+
+    # Offsets for positioning content within the viewBox
+    # Content origin starts after data_margin + bleed
+    content_offset_m = data_margin_m + bleed_m
+
+    print(f"  Full document: {doc_width_in:.2f}\" x {doc_height_in:.2f}\"")
+    print(f"    (includes {DATA_MARGIN_IN}\" data margin + {BLEED_INCHES}\" bleed on each side)")
+
+    # Create SVG with exact dimensions (data margin + bleed + trim + bleed + data margin)
     dwg = svgwrite.Drawing(
         str(output_path),
-        size=(f"{doc_width_with_bleed}in", f"{doc_height_with_bleed}in"),
+        size=(f"{doc_width_in}in", f"{doc_height_in}in"),
         viewBox=f"0 0 {viewbox_width_with_bleed} {viewbox_height_with_bleed}",
     )
     # No aspect ratio adjustment needed - dimensions match exactly
     dwg["preserveAspectRatio"] = "none"
 
-    # Create a clipPath to constrain all content to viewBox (excluding bleed)
+    # Create a clipPath to constrain map content to trim area (excludes bleed and data margin)
+    # Trim area starts at (data_margin + bleed) from document edge
     clip_path = dwg.defs.add(dwg.clipPath(id="viewbox-clip"))
-    clip_path.add(dwg.rect((bleed_m, bleed_m), (viewbox_width, viewbox_height)))
+    clip_path.add(dwg.rect((content_offset_m, content_offset_m), (trim_width_m, trim_height_m)))
 
     # Create an expanded clip-path for rotated reference content (covers rotation corners)
     if config.rotation_deg != 0:
-        rotation_buffer = max(viewbox_width, viewbox_height) * 0.5
+        rotation_buffer = max(trim_width_m, trim_height_m) * 0.5
         clip_path_rotated = dwg.defs.add(dwg.clipPath(id="viewbox-clip-rotated"))
         clip_path_rotated.add(dwg.rect(
-            (bleed_m - rotation_buffer, bleed_m - rotation_buffer),
-            (viewbox_width + 2 * rotation_buffer, viewbox_height + 2 * rotation_buffer)
+            (content_offset_m - rotation_buffer, content_offset_m - rotation_buffer),
+            (trim_width_m + 2 * rotation_buffer, trim_height_m + 2 * rotation_buffer)
         ))
 
     # Create raster-based patterns for better Affinity Designer compatibility
@@ -1286,10 +1339,18 @@ def render_tactical_svg(
         """Convert world coordinates (meters) to SVG coordinates.
 
         SVG Y-axis is inverted (increases downward), so we flip Y.
-        Coordinates are offset by margin and bleed to position the map.
+        Coordinates are offset to position hex grid within the play area.
+
+        Layout (from edge of document):
+        - data_margin_m: space for reference data (outside print area)
+        - bleed_m: print bleed
+        - play_margin: space between trim edge and hex grid
+        - center_offset: centering within play area
         """
-        svg_x = (x - config.min_x) + MARGIN_M + bleed_m
-        svg_y = viewbox_height_with_bleed - ((y - config.min_y) + MARGIN_M + bleed_m)
+        # X: offset by data margin, bleed, play margin (left), and centering
+        svg_x = (x - config.min_x) + content_offset_m + play_margin_left_m + center_offset_x_m
+        # Y: inverted, offset by data margin, bleed, play margin (top), and centering
+        svg_y = (config.max_y - y) + content_offset_m + play_margin_top_m + center_offset_y_m
         return (svg_x, svg_y)
 
     # Create playable area boundary (union of all hex polygons)
@@ -2488,13 +2549,13 @@ def render_tactical_svg(
         )
 
         # For label positioning, we need to find where rotated lines cross the hex boundary
-        # Rotation parameters
-        rot_cx = viewbox_width / 2
-        rot_cy = viewbox_height / 2
+        # Rotation parameters - rotation center is center of trim area
+        rot_cx = content_offset_m + trim_width_m / 2
+        rot_cy = content_offset_m + trim_height_m / 2
         angle_rad = math.radians(config.rotation_deg)
 
         def rotate_point(x, y):
-            """Rotate a point around the viewBox center."""
+            """Rotate a point around the trim area center."""
             dx, dy = x - rot_cx, y - rot_cy
             rx = dx * math.cos(angle_rad) - dy * math.sin(angle_rad)
             ry = dx * math.sin(angle_rad) + dy * math.cos(angle_rad)
@@ -2689,28 +2750,32 @@ def render_tactical_svg(
                 except:
                     pass  # Skip if intersection fails
 
-    # Layer 9: Map data block (in top out-of-play border)
+    # Layer 9: Map data block (in data margin area - outside bleed, for SVG reference only)
     print("  Rendering map data block...")
 
     # Transform corners from projected CRS to WGS84
     transformer_to_wgs84 = Transformer.from_crs(GRID_CRS, WGS84, always_xy=True)
     transformer_to_utm = Transformer.from_crs(GRID_CRS, config.utm_crs, always_xy=True)
 
+    # Calculate hex grid origin in SVG coordinates
+    hex_grid_svg_x = content_offset_m + play_margin_left_m + center_offset_x_m
+    hex_grid_svg_y = content_offset_m + play_margin_top_m + center_offset_y_m
+
     # Calculate corner coordinates
     # When rotated, we need to find what world coordinates are at the visible corners
     if config.rotation_deg != 0:
-        # The visible area corners (in SVG coordinates)
+        # The visible area corners (in SVG coordinates) - corners of hex grid
         visible_corners_svg = {
-            "NW": (MARGIN_M, MARGIN_M),
-            "NE": (viewbox_width - MARGIN_M, MARGIN_M),
-            "SW": (MARGIN_M, viewbox_height - MARGIN_M),
-            "SE": (viewbox_width - MARGIN_M, viewbox_height - MARGIN_M),
+            "NW": (hex_grid_svg_x, hex_grid_svg_y),
+            "NE": (hex_grid_svg_x + hex_grid_width, hex_grid_svg_y),
+            "SW": (hex_grid_svg_x, hex_grid_svg_y + hex_grid_height),
+            "SE": (hex_grid_svg_x + hex_grid_width, hex_grid_svg_y + hex_grid_height),
         }
 
         # Inverse rotation to find world coordinates
-        # SVG rotation is around (rot_cx, rot_cy), so we need to reverse it
-        rot_cx = viewbox_width / 2
-        rot_cy = viewbox_height / 2
+        # SVG rotation is around the center of the trim area
+        rot_cx = content_offset_m + trim_width_m / 2
+        rot_cy = content_offset_m + trim_height_m / 2
         angle_rad = math.radians(-config.rotation_deg)  # Negative for inverse
 
         def inverse_rotate_svg_to_world(svg_x, svg_y):
@@ -2725,8 +2790,8 @@ def render_tactical_svg(
             unrot_svg_x = rx + rot_cx
             unrot_svg_y = ry + rot_cy
             # Convert from SVG to world (inverse of to_svg)
-            world_x = (unrot_svg_x - MARGIN_M) + config.min_x
-            world_y = config.min_y + (viewbox_height - unrot_svg_y - MARGIN_M)
+            world_x = (unrot_svg_x - hex_grid_svg_x) + config.min_x
+            world_y = config.max_y - (unrot_svg_y - hex_grid_svg_y)
             return (world_x, world_y)
 
         corners_proj = {}
@@ -2760,12 +2825,12 @@ def render_tactical_svg(
     # Get UTM coordinates for center
     center_utm_e, center_utm_n = transformer_to_utm.transform(config.center_x, config.center_y)
 
-    # Data block positioning - in the top margin area (all in meters)
-    # Offset by bleed_m to stay within trim area
-    data_block_y = bleed_m + DATA_FONT_SIZE_M + 20  # Start near top of trim area
+    # Data block positioning - in the data margin area (outside bleed, for SVG reference only)
+    # This area will NOT be printed - it's for artist reference in the SVG
+    data_block_y = DATA_FONT_SIZE_M + 20  # Start near top of data margin area
 
     # Left column: MGRS and coordinate data
-    left_col_x = bleed_m + MARGIN_M
+    left_col_x = DATA_FONT_SIZE_M
 
     layer_map_data.add(dwg.text(
         "MAP CENTER",
@@ -2800,8 +2865,8 @@ def render_tactical_svg(
         font_family="monospace",
     ))
 
-    # Middle column: Grid info
-    mid_col_x = bleed_m + viewbox_width * 0.35
+    # Middle column: Grid info (positioned in data margin area)
+    mid_col_x = viewbox_width_with_bleed * 0.35
 
     layer_map_data.add(dwg.text(
         "GRID INFO",
@@ -2837,8 +2902,8 @@ def render_tactical_svg(
             font_family="monospace",
         ))
 
-    # Right column: Corner coordinates
-    right_col_x = bleed_m + viewbox_width * 0.62
+    # Right column: Corner coordinates (positioned in data margin area)
+    right_col_x = viewbox_width_with_bleed * 0.62
 
     layer_map_data.add(dwg.text(
         "CORNER COORDINATES (WGS84)",
@@ -2870,15 +2935,14 @@ def render_tactical_svg(
         font_family="monospace",
     ))
 
-    # Layer 10: Compass Rose (in top-right out-of-play area)
+    # Layer 10: Compass Rose (in data margin area - outside bleed, for SVG reference only)
     # Shows true north direction when map is rotated
     print("  Rendering compass rose...")
 
-    # Position compass in top-right margin area
-    # Use bleed offset + margin width to stay in the out-of-play frame
+    # Position compass in top-right data margin area (outside print area)
     compass_size = HEX_SIZE_M * 0.8  # Slightly smaller than a hex
-    compass_cx = viewbox_width_with_bleed - bleed_m - MARGIN_M / 2  # Center in right margin
-    compass_cy = bleed_m + MARGIN_M / 2 + DATA_LINE_HEIGHT_M * 4  # Below data block
+    compass_cx = viewbox_width_with_bleed - data_margin_m / 2  # Center in right data margin
+    compass_cy = data_margin_m / 2 + DATA_LINE_HEIGHT_M * 2  # In top data margin area
 
     # Arrow dimensions
     arrow_length = compass_size * 0.4
@@ -2955,21 +3019,22 @@ def render_tactical_svg(
     # Layer order: reference -> terrain -> features -> frame -> grid/labels
     print("  Assembling layers...")
 
-    # Create a master group with clipPath to constrain everything to viewBox
+    # Add background OUTSIDE the clipped group so it fills entire document
+    # This provides the dark gray background for data margin area
+    dwg.add(layer_background)
+
+    # Create a master group with clipPath to constrain map content to trim area
     master_group = dwg.g(id="Master_Content")
     master_group["clip-path"] = "url(#viewbox-clip)"
-
-    # Background is always unrotated (fills entire viewBox)
-    master_group.add(layer_background)        # Base background
 
     # If rotation is specified, wrap geographic content in a rotated group
     # Hex grid and base terrain stay axis-aligned (unrotated) with the frame
     # MGRS grid rotates with terrain (represents real-world UTM coordinates)
     if config.rotation_deg != 0:
         print(f"  Applying {config.rotation_deg}° rotation...")
-        # Rotation center is the center of the viewBox
-        rot_cx = viewbox_width / 2
-        rot_cy = viewbox_height / 2
+        # Rotation center is the center of the trim area (not the full document)
+        rot_cx = content_offset_m + trim_width_m / 2
+        rot_cy = content_offset_m + trim_height_m / 2
         # SVG rotation: positive = clockwise
 
         # Reference tiles in their own rotated group at the very bottom (hidden by default)
@@ -3102,12 +3167,65 @@ def render_tactical_svg(
         master_group.add(layer_mgrs_grid)         # MGRS grid lines
         master_group.add(layer_mgrs_labels)       # MGRS labels
 
-    # Map data block stays horizontal (unrotated) at top
-    master_group.add(layer_map_data)          # Map metadata block
-    master_group.add(layer_compass)           # Compass rose
-
-    # Add master group to drawing
+    # Add master group to drawing (contains clipped map content)
     dwg.add(master_group)
+
+    # Map data and compass are OUTSIDE the clipped group
+    # They render in the data margin area (outside trim, not printed)
+    dwg.add(layer_map_data)          # Map metadata block
+    dwg.add(layer_compass)           # Compass rose
+
+    # Add trim and bleed guide lines (for print setup reference)
+    layer_print_guides = dwg.g(id="Print_Guides")
+
+    # Bleed line - outer boundary of bleed area (cyan, dashed)
+    # Bleed starts at data_margin from document edge
+    bleed_line_x = data_margin_m
+    bleed_line_y = data_margin_m
+    bleed_line_w = trim_width_m + 2 * bleed_m
+    bleed_line_h = trim_height_m + 2 * bleed_m
+    layer_print_guides.add(dwg.rect(
+        (bleed_line_x, bleed_line_y),
+        (bleed_line_w, bleed_line_h),
+        fill="none",
+        stroke="#00FFFF",  # Cyan
+        stroke_width=2,
+        stroke_dasharray="20,10",
+    ))
+
+    # Trim line - where paper will be cut (magenta, solid)
+    # Trim starts at data_margin + bleed from document edge
+    trim_line_x = content_offset_m
+    trim_line_y = content_offset_m
+    layer_print_guides.add(dwg.rect(
+        (trim_line_x, trim_line_y),
+        (trim_width_m, trim_height_m),
+        fill="none",
+        stroke="#FF00FF",  # Magenta
+        stroke_width=2,
+    ))
+
+    # Add labels for the guide lines
+    guide_label_size = DATA_FONT_SIZE_M * 0.7
+    # Bleed label (top-left corner of bleed line)
+    layer_print_guides.add(dwg.text(
+        "BLEED",
+        insert=(bleed_line_x + 10, bleed_line_y - 5),
+        font_size=guide_label_size,
+        fill="#00FFFF",
+        font_family="sans-serif",
+    ))
+    # Trim label (top-left corner of trim line)
+    layer_print_guides.add(dwg.text(
+        "TRIM (34\" x 22\")",
+        insert=(trim_line_x + 10, trim_line_y - 5),
+        font_size=guide_label_size,
+        fill="#FF00FF",
+        font_family="sans-serif",
+    ))
+
+    dwg.add(layer_print_guides)
+    print("  Added print guide lines (trim=magenta, bleed=cyan)")
 
     # Save
     dwg.save()
