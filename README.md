@@ -38,11 +38,15 @@ setup.bat
 venv\Scripts\activate.bat
 ```
 
-### 2. Start the Web Server
-```bash
-python map_server.py
-```
-This opens http://localhost:8080 in your browser.
+### 2. Start the Map Generator
+
+**Mac:** Double-click `Start Map Generator.command`
+
+**Windows:** Double-click `Start Map Generator.bat`
+
+This opens http://localhost:8080 in your browser automatically.
+
+*(Alternative: run `python map_server.py` from terminal)*
 
 ### 3. Configure Your Map
 
@@ -110,18 +114,20 @@ The output is styled to match OpenTopoMap aesthetics:
 
 ```
 Wargame Mapping/
-├── map_config.html      # Web-based configuration tool
-├── map_config.json      # Generated config file
-├── map_server.py        # Flask web server for integrated workflow
-├── tactical_map.py      # Main map generator
-├── download_mgrs_data.py # Data downloader
-├── setup.sh             # Mac/Linux setup script
-├── setup.bat            # Windows setup script
-├── data/                # Downloaded geographic data (per MGRS square)
-│   └── {zone}/{square}/ # e.g., 51P/TT/
-├── output/              # Generated maps
-│   └── {region}/{name}/ # e.g., 51P_TT/san_carlos/
-└── venv/                # Python virtual environment
+├── Start Map Generator.command  # Mac launcher (double-click)
+├── Start Map Generator.bat      # Windows launcher (double-click)
+├── map_config.html              # Web-based configuration tool
+├── map_config.json              # Generated config file
+├── map_server.py                # Flask web server
+├── tactical_map.py              # Main map generator
+├── download_mgrs_data.py        # Data downloader
+├── setup.sh                     # Mac/Linux setup script
+├── setup.bat                    # Windows setup script
+├── data/                        # Downloaded geographic data
+│   └── {zone}/{square}/         # e.g., 51P/TT/
+├── output/                      # Generated maps
+│   └── {region}/{name}/         # e.g., 51P_TT/san_carlos/
+└── venv/                        # Python virtual environment
 ```
 
 ## Dependencies
