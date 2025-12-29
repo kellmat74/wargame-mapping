@@ -35,6 +35,10 @@ generation_status = {
 status_lock = threading.Lock()
 output_queue = queue.Queue()
 
+# Track active subprocess for clean shutdown
+active_process = None
+process_lock = threading.Lock()
+
 
 @app.route('/')
 def index():
@@ -129,6 +133,8 @@ def check_data_exists(region):
 
 def run_subprocess(cmd, description):
     """Run a subprocess and stream output to the queue."""
+    global active_process
+
     output_queue.put(f">>> {description}")
 
     process = subprocess.Popen(
@@ -140,15 +146,23 @@ def run_subprocess(cmd, description):
         cwd=str(Path(__file__).parent)
     )
 
-    for line in iter(process.stdout.readline, ''):
-        line = line.rstrip()
-        if line:
-            with status_lock:
-                generation_status['output'].append(line)
-            output_queue.put(line)
+    # Track this process for clean shutdown
+    with process_lock:
+        active_process = process
 
-    process.wait()
-    return process.returncode
+    try:
+        for line in iter(process.stdout.readline, ''):
+            line = line.rstrip()
+            if line:
+                with status_lock:
+                    generation_status['output'].append(line)
+                output_queue.put(line)
+
+        process.wait()
+        return process.returncode
+    finally:
+        with process_lock:
+            active_process = None
 
 
 def run_generation(region):
@@ -293,11 +307,32 @@ def check_data():
 
 @app.route('/api/shutdown', methods=['POST'])
 def shutdown():
-    """Shut down the server."""
+    """Shut down the server and any running subprocesses."""
+    global generation_status
+
     def stop_server():
         # Give time for response to be sent
-        import time
         time.sleep(0.5)
+
+        # Kill any active subprocess first
+        with process_lock:
+            if active_process is not None:
+                try:
+                    active_process.terminate()
+                    active_process.wait(timeout=2)
+                except:
+                    try:
+                        active_process.kill()
+                    except:
+                        pass
+
+        # Update status
+        with status_lock:
+            generation_status['running'] = False
+            generation_status['complete'] = True
+            generation_status['error'] = 'Server shutdown requested'
+
+        # Kill the server
         os.kill(os.getpid(), signal.SIGTERM)
 
     thread = threading.Thread(target=stop_server)
