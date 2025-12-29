@@ -782,7 +782,8 @@
                 y -= 10000000;
             }
 
-            const lonOrigin = (zone - 1) * 6 - 180 + 3;
+            const lonOriginDeg = (zone - 1) * 6 - 180 + 3;
+            const lonOriginRad = lonOriginDeg * Math.PI / 180;
             const M = y / k0;
             const mu = M / (a * (1 - e2/4 - 3*e2*e2/64 - 5*e2*e2*e2/256));
 
@@ -800,7 +801,7 @@
                 - (5 + 3*T1 + 10*C1 - 4*C1*C1 - 9*ep2) * D*D*D*D/24
                 + (61 + 90*T1 + 298*C1 + 45*T1*T1 - 252*ep2 - 3*C1*C1) * D*D*D*D*D*D/720);
 
-            const lon = lonOrigin + (D - (1 + 2*T1 + C1) * D*D*D/6
+            const lon = lonOriginRad + (D - (1 + 2*T1 + C1) * D*D*D/6
                 + (5 - 2*C1 + 28*T1 - 3*C1*C1 + 8*ep2 + 24*T1*T1) * D*D*D*D*D/120) / Math.cos(phi1);
 
             return {
