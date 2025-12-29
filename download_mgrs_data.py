@@ -216,6 +216,8 @@ def download_osm_features(
         all_elements = []
         seen_ids = set()  # Deduplicate elements that span chunks
 
+        failed_chunks = []
+
         for idx, chunk_bounds in enumerate(chunks):
             if total_chunks > 1:
                 print(f"      Chunk {idx + 1}/{total_chunks}...", end=" ", flush=True)
@@ -242,7 +244,43 @@ def download_osm_features(
                     print(f"error: {e}")
                 else:
                     print(f"    Error: {e}")
+                failed_chunks.append((idx, chunk_bounds))
                 time.sleep(API_DELAY)
+
+        # Retry failed chunks with exponential backoff
+        if failed_chunks:
+            print(f"    Retrying {len(failed_chunks)} failed chunks...")
+            for retry in range(3):  # Up to 3 retries
+                if not failed_chunks:
+                    break
+
+                wait_time = (retry + 1) * 5  # 5s, 10s, 15s
+                print(f"      Retry {retry + 1}/3 (waiting {wait_time}s)...")
+                time.sleep(wait_time)
+
+                still_failed = []
+                for idx, chunk_bounds in failed_chunks:
+                    print(f"        Chunk {idx + 1}...", end=" ", flush=True)
+                    try:
+                        elements = download_osm_chunk(chunk_bounds, query_body)
+                        new_count = 0
+                        for elem in elements:
+                            elem_id = (elem.get("type"), elem.get("id"))
+                            if elem_id not in seen_ids:
+                                seen_ids.add(elem_id)
+                                all_elements.append(elem)
+                                new_count += 1
+                        print(f"{new_count} new features")
+                        time.sleep(API_DELAY)
+                    except Exception as e:
+                        print(f"error: {e}")
+                        still_failed.append((idx, chunk_bounds))
+                        time.sleep(API_DELAY)
+
+                failed_chunks = still_failed
+
+            if failed_chunks:
+                print(f"    WARNING: {len(failed_chunks)} chunks failed after retries")
 
         if all_elements:
             geojson = osm_to_geojson({"elements": all_elements})
