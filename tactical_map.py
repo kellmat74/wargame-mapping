@@ -19,8 +19,9 @@ import geopandas as gpd
 import rasterio
 import mgrs
 from rasterio.warp import transform_bounds
-from shapely.geometry import Point, LineString, Polygon, box
+from shapely.geometry import Point, LineString, Polygon, box, MultiLineString
 from shapely.affinity import rotate
+from shapely.ops import linemerge
 from pyproj import Transformer, CRS
 import svgwrite
 
@@ -546,6 +547,68 @@ def classify_terrain(
     return hexes
 
 
+def merge_road_segments(roads: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Merge connected road segments by road type to reduce fragment count.
+
+    This uses shapely's linemerge to combine LineStrings that share endpoints,
+    grouped by OSM highway type. Results in fewer, longer road segments that
+    are easier to edit in vector graphics software.
+    """
+    if roads.empty:
+        return roads
+
+    # Get the highway column (OSM road type)
+    if 'highway' not in roads.columns:
+        print("    No 'highway' column found, skipping merge")
+        return roads
+
+    original_count = len(roads)
+    merged_rows = []
+
+    # Group by highway type and merge each group
+    for highway_type, group in roads.groupby('highway'):
+        if len(group) == 0:
+            continue
+
+        # Collect all geometries for this road type
+        geometries = list(group.geometry)
+
+        # Use linemerge to combine connected segments
+        # linemerge returns a LineString if all segments connect into one line,
+        # or a MultiLineString if there are disconnected groups
+        merged = linemerge(geometries)
+
+        # Extract individual LineStrings from the result
+        if merged.is_empty:
+            continue
+        elif merged.geom_type == 'LineString':
+            result_geoms = [merged]
+        elif merged.geom_type == 'MultiLineString':
+            result_geoms = list(merged.geoms)
+        else:
+            # Fallback: keep original geometries
+            result_geoms = geometries
+
+        # Create a row for each merged segment
+        # Copy attributes from first row of the group
+        template_row = group.iloc[0].to_dict()
+        for geom in result_geoms:
+            row = template_row.copy()
+            row['geometry'] = geom
+            merged_rows.append(row)
+
+    if not merged_rows:
+        return roads
+
+    # Create new GeoDataFrame with merged roads
+    merged_gdf = gpd.GeoDataFrame(merged_rows, crs=roads.crs)
+
+    print(f"    Merged {original_count} segments → {len(merged_gdf)} contiguous paths")
+
+    return merged_gdf
+
+
 def load_roads(config: MapConfig) -> gpd.GeoDataFrame:
     """Load roads within map bounds (uses expanded bounds for rotation)."""
     # Prefer detailed_roads.geojson if available (has all road types)
@@ -576,6 +639,9 @@ def load_roads(config: MapConfig) -> gpd.GeoDataFrame:
         )
         roads = roads[roads.intersects(map_bounds)]
         print(f"    Filtered to {len(roads)} road segments in bounds")
+
+        # Merge connected segments by road type for easier editing
+        roads = merge_road_segments(roads)
 
         return roads
     except Exception as e:
