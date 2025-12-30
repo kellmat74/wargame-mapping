@@ -3428,6 +3428,33 @@ def main():
     if config.rotation_deg != 0:
         print(f"Rotation: {config.rotation_deg}° clockwise")
 
+    # Check if data directory exists and has required files
+    if not config.data_path.exists():
+        print(f"\n{'='*60}")
+        print("ERROR: Data directory not found!")
+        print(f"{'='*60}")
+        print(f"Expected: {config.data_path}")
+        print(f"\nTo download the required data, ask Claude:")
+        print(f'  "Download OSM data for region {config.region}"')
+        print(f"\nOr run manually:")
+        print(f"  python3 download_mgrs_data_osmium.py")
+        print(f"{'='*60}")
+        return
+
+    # Check for essential data file (elevation.tif)
+    dem_path = config.data_path / "elevation.tif"
+    if not dem_path.exists():
+        print(f"\n{'='*60}")
+        print("ERROR: Elevation data not found!")
+        print(f"{'='*60}")
+        print(f"Expected: {dem_path}")
+        print(f"\nTo download the required data, ask Claude:")
+        print(f'  "Download OSM data for region {config.region}"')
+        print(f"\nOr run manually:")
+        print(f"  python3 download_mgrs_data_osmium.py")
+        print(f"{'='*60}")
+        return
+
     # Create output directory
     config.output_path.mkdir(parents=True, exist_ok=True)
 
