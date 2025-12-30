@@ -507,29 +507,33 @@
                 </div>
             </div>
 
-            <!-- Shift Controls (inline) -->
+            <!-- Shift Controls (inline) - Map-relative directions -->
             <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #0f3460;">
-                <label style="display: block; margin-bottom: 10px; font-size: 12px; color: #aaa; text-transform: uppercase;">Fine-tune Position</label>
+                <label style="display: block; margin-bottom: 10px; font-size: 12px; color: #aaa; text-transform: uppercase;">Fine-tune Position (Map-Relative)</label>
                 <div style="display: flex; align-items: center; gap: 20px;">
                     <div class="shift-controls">
                         <div class="shift-row">
-                            <button class="shift-btn" onclick="shift('N')">N</button>
+                            <button class="shift-btn" onclick="shift('up')" title="Shift up on map">↑</button>
                         </div>
                         <div class="shift-row">
-                            <button class="shift-btn" onclick="shift('W')">W</button>
+                            <button class="shift-btn" onclick="shift('left')" title="Shift left on map">←</button>
                             <div class="shift-center">+</div>
-                            <button class="shift-btn" onclick="shift('E')">E</button>
+                            <button class="shift-btn" onclick="shift('right')" title="Shift right on map">→</button>
                         </div>
                         <div class="shift-row">
-                            <button class="shift-btn" onclick="shift('S')">S</button>
+                            <button class="shift-btn" onclick="shift('down')" title="Shift down on map">↓</button>
                         </div>
                     </div>
                     <div class="shift-distance">
                         <label><input type="radio" name="shiftDist" value="100"> 100m</label>
-                        <label><input type="radio" name="shiftDist" value="500"> 500m</label>
-                        <label><input type="radio" name="shiftDist" value="1000" checked> 1km</label>
-                        <label><input type="radio" name="shiftDist" value="5000"> 5km</label>
+                        <label><input type="radio" name="shiftDist" value="300"> 300m</label>
+                        <label><input type="radio" name="shiftDist" value="500" checked> 500m</label>
+                        <label><input type="radio" name="shiftDist" value="1000"> 1km</label>
                     </div>
+                </div>
+                <div style="font-size: 11px; color: #666; margin-top: 8px;">
+                    Arrows move center relative to rotated map view, not compass directions.<br>
+                    To shift the map left, move the center right →
                 </div>
             </div>
         </div>
@@ -1023,8 +1027,10 @@
             rotation: 0,
             region: '', // Auto-detect by default
             mapName: 'tactical_map',
-            shiftNorth: 0,
+            shiftNorth: 0,      // Geographic shift tracking (for display)
             shiftEast: 0,
+            mapShiftUp: 0,      // Map-relative shift tracking (for notes)
+            mapShiftRight: 0,
             requiredSquares: [],
             availableRegions: []
         };
@@ -1128,8 +1134,9 @@
             const display = document.getElementById('configDisplay');
             const effectiveRegion = state.region || state.autoRegion || 'auto-detect';
 
-            const shiftInfo = (state.shiftNorth !== 0 || state.shiftEast !== 0)
-                ? `\n<span class="label">Total Shift:</span> <span class="value">${formatShift(state.shiftNorth, 'N', 'S')}, ${formatShift(state.shiftEast, 'E', 'W')}</span>`
+            // Show map-relative shift info
+            const shiftInfo = (state.mapShiftUp !== 0 || state.mapShiftRight !== 0)
+                ? `\n<span class="label">Position Adjusted:</span> <span class="value">${formatShift(state.mapShiftUp, '↑', '↓')}, ${formatShift(state.mapShiftRight, '→', '←')}</span>`
                 : '';
 
             display.innerHTML = `
@@ -1157,24 +1164,54 @@
 
         function shift(direction) {
             const distance = getShiftDistance();
+            const rotation = state.rotation || 0;
 
+            // Calculate bearing based on map-relative direction and rotation
+            // rotation_deg is positive for CW rotation (map turns CW, so "up" on map points to bearing = -rotation)
+            // At 0° rotation: up=N(0°), right=E(90°), down=S(180°), left=W(270°)
+            // At -20° rotation (CCW): up=NNE(20°), right=ESE(110°), etc.
+            let bearing;
             switch(direction) {
-                case 'N':
-                    state.shiftNorth += distance;
-                    state.centerLat += distance / METERS_PER_DEG_LAT;
+                case 'up':
+                    bearing = -rotation;  // Up on rotated map
                     break;
-                case 'S':
-                    state.shiftNorth -= distance;
-                    state.centerLat -= distance / METERS_PER_DEG_LAT;
+                case 'down':
+                    bearing = -rotation + 180;  // Down on rotated map
                     break;
-                case 'E':
-                    state.shiftEast += distance;
-                    state.centerLon += distance / METERS_PER_DEG_LON;
+                case 'right':
+                    bearing = -rotation + 90;  // Right on rotated map
                     break;
-                case 'W':
-                    state.shiftEast -= distance;
-                    state.centerLon -= distance / METERS_PER_DEG_LON;
+                case 'left':
+                    bearing = -rotation + 270;  // Left on rotated map
                     break;
+                default:
+                    return;
+            }
+
+            // Normalize bearing to 0-360
+            bearing = ((bearing % 360) + 360) % 360;
+
+            // Convert bearing to radians
+            const bearingRad = bearing * Math.PI / 180;
+
+            // Calculate lat/lon deltas
+            // North component = distance * cos(bearing)
+            // East component = distance * sin(bearing)
+            const deltaLat = distance * Math.cos(bearingRad) / METERS_PER_DEG_LAT;
+            const deltaLon = distance * Math.sin(bearingRad) / METERS_PER_DEG_LON;
+
+            // Update state - geographic shift
+            state.shiftNorth += distance * Math.cos(bearingRad);
+            state.shiftEast += distance * Math.sin(bearingRad);
+            state.centerLat += deltaLat;
+            state.centerLon += deltaLon;
+
+            // Track map-relative shift for notes
+            switch(direction) {
+                case 'up': state.mapShiftUp += distance; break;
+                case 'down': state.mapShiftUp -= distance; break;
+                case 'right': state.mapShiftRight += distance; break;
+                case 'left': state.mapShiftRight -= distance; break;
             }
 
             document.getElementById('centerLat').value = state.centerLat.toFixed(6);
@@ -1198,6 +1235,20 @@
                 region: effectiveRegion,
                 rotation_deg: state.rotation
             };
+
+            // Add adjustment notes if any map-relative shifts were made
+            if (state.mapShiftUp !== 0 || state.mapShiftRight !== 0) {
+                const parts = [];
+                if (state.mapShiftUp !== 0) {
+                    const dir = state.mapShiftUp > 0 ? 'up' : 'down';
+                    parts.push(`${Math.abs(state.mapShiftUp)}m ${dir}`);
+                }
+                if (state.mapShiftRight !== 0) {
+                    const dir = state.mapShiftRight > 0 ? 'right' : 'left';
+                    parts.push(`${Math.abs(state.mapShiftRight)}m ${dir}`);
+                }
+                config._adjustment_notes = `Shifted ${parts.join(', ')} (map-relative)`;
+            }
 
             const jsonStr = JSON.stringify(config, null, 2);
             const blob = new Blob([jsonStr], { type: 'application/json' });
@@ -1255,6 +1306,8 @@ config = MapConfig(
             state.mapName = 'tactical_map';
             state.shiftNorth = 0;
             state.shiftEast = 0;
+            state.mapShiftUp = 0;
+            state.mapShiftRight = 0;
 
             document.getElementById('coordPaste').value = '';
             document.getElementById('centerLat').value = state.centerLat;
@@ -1496,6 +1549,8 @@ config = MapConfig(
                     state.centerLon = lon;
                     state.shiftNorth = 0;
                     state.shiftEast = 0;
+                    state.mapShiftUp = 0;
+                    state.mapShiftRight = 0;
                     state.region = ''; // Reset to auto-detect
 
                     document.getElementById('centerLat').value = lat.toFixed(6);
@@ -1506,11 +1561,13 @@ config = MapConfig(
                 }
             });
 
-            // Coordinate inputs
+            // Coordinate inputs - reset shifts when manually changing coordinates
             document.getElementById('centerLat').addEventListener('input', (e) => {
                 state.centerLat = parseFloat(e.target.value) || 0;
                 state.shiftNorth = 0;
                 state.shiftEast = 0;
+                state.mapShiftUp = 0;
+                state.mapShiftRight = 0;
                 updateDisplay();
             });
 
@@ -1518,6 +1575,8 @@ config = MapConfig(
                 state.centerLon = parseFloat(e.target.value) || 0;
                 state.shiftNorth = 0;
                 state.shiftEast = 0;
+                state.mapShiftUp = 0;
+                state.mapShiftRight = 0;
                 updateDisplay();
             });
 

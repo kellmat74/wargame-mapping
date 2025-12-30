@@ -3640,6 +3640,88 @@ GEOFABRIK_TO_COUNTRY = {
 }
 
 
+def download_coastline_for_region(data_path: Path, bounds_file: Path) -> bool:
+    """Download coastline data from OSM Overpass API for a region.
+
+    Coastline data is NOT included in Geofabrik PBF extracts - it must be
+    downloaded separately from OpenStreetMap via the Overpass API.
+
+    Args:
+        data_path: Path to the MGRS square data directory
+        bounds_file: Path to the bounds.json file with region coordinates
+
+    Returns:
+        True if download succeeded, False otherwise
+    """
+    import requests
+
+    OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+
+    try:
+        with open(bounds_file) as f:
+            bounds_data = json.load(f)
+
+        bounds = bounds_data.get("bounds", {})
+        min_lon = bounds.get("min_lon")
+        min_lat = bounds.get("min_lat")
+        max_lon = bounds.get("max_lon")
+        max_lat = bounds.get("max_lat")
+
+        if None in (min_lon, min_lat, max_lon, max_lat):
+            print(f"    Invalid bounds in {bounds_file}")
+            return False
+
+        bbox = f"{min_lat},{min_lon},{max_lat},{max_lon}"
+
+        query = f"""
+        [out:json][timeout:300][bbox:{bbox}];
+        (
+            way["natural"="coastline"];
+        );
+        out body geom;
+        """
+
+        response = requests.post(
+            OVERPASS_URL,
+            data={"data": query},
+            timeout=600
+        )
+
+        if response.status_code != 200:
+            print(f"    Overpass API error: {response.status_code}")
+            return False
+
+        elements = response.json().get("elements", [])
+        features = []
+
+        for element in elements:
+            if element["type"] == "way" and "geometry" in element:
+                coords = [[p["lon"], p["lat"]] for p in element["geometry"]]
+                if len(coords) >= 2:
+                    features.append({
+                        "type": "Feature",
+                        "id": f"w{element['id']}",
+                        "properties": element.get("tags", {}),
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": coords
+                        }
+                    })
+
+        geojson = {"type": "FeatureCollection", "features": features}
+        coastline_file = data_path / "coastline.geojson"
+
+        with open(coastline_file, 'w') as f:
+            json.dump(geojson, f)
+
+        print(f"    Downloaded {len(features)} coastline features from OSM")
+        return True
+
+    except Exception as e:
+        print(f"    Error downloading coastline: {e}")
+        return False
+
+
 def extract_single_mgrs_square(mgrs_region: str, available_pbfs: list) -> str:
     """Extract data for a single MGRS square.
 
@@ -3662,6 +3744,17 @@ def extract_single_mgrs_square(mgrs_region: str, available_pbfs: list) -> str:
     # Check if already extracted
     if data_path.exists() and (data_path / "elevation.tif").exists():
         print(f"  {mgrs_region}: Already extracted")
+
+        # Check for missing coastline data and download if needed
+        # NOTE: Coastline data comes from OSM via Overpass API, not from Geofabrik PBF extracts
+        # Geofabrik regional extracts don't include coastlines, so we download them separately
+        coastline_file = data_path / "coastline.geojson"
+        if not coastline_file.exists():
+            bounds_file = data_path / "bounds.json"
+            if bounds_file.exists():
+                print(f"  {mgrs_region}: Downloading missing coastline data from OSM...")
+                download_coastline_for_region(data_path, bounds_file)
+
         # Try to get country from bounds.json
         bounds_file = data_path / "bounds.json"
         if bounds_file.exists():
