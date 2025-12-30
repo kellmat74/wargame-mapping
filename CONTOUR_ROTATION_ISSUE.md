@@ -244,16 +244,22 @@ Yonaguni now works correctly with:
 
 ---
 
-## Remaining Work
+### Batanes Status: ✅ RESOLVED
 
-### Bug Fix (Batanes Contour Offset)
-The Batanes-specific contour offset issue remains unresolved:
-1. **Investigate the 100m vs 1.5km discrepancy** - Why does measured offset differ so much from visual?
-2. **Try larger DEM offset values** - Maybe -150m isn't enough
-3. **Consider per-region offset configuration** - Different regions may need different corrections
-4. **Try alternative DEM source** - ASTER GDEM or other sources may have better alignment
+**The Batanes contour offset issue is now resolved!**
 
-### Debug Scripts (Not Committed)
+After switching to OSM land polygons (Session 7), Batanes now renders correctly with:
+- 0° rotation: Perfect alignment
+- 50° rotation: Perfect alignment
+
+The root cause was likely related to the complex coastline-to-polygon conversion code
+that was removed when switching to OSM land polygons. The old code used elevation
+sampling to determine ocean vs land, which may have introduced coordinate artifacts
+that accumulated when combined with rotation transforms.
+
+---
+
+## Debug Scripts (Not Committed)
 - `debug_contour_offset.py` - Verify DEM offset application
 - `debug_coverage_gap.py` - Find gaps in contour coverage
 - `debug_dem_alignment.py` - Check DEM-OSM alignment
