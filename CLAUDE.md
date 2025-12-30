@@ -199,6 +199,14 @@ clear:    #f5f5dc (beige)
 
 ## Notes for AI Assistant
 
+### Gathering Context from Previous Sessions
+**IMPORTANT**: Check git commit history for context from previous sessions:
+- `git log --oneline -20` for quick overview of recent changes
+- `git log -5` for detailed commit messages with decision rationale
+- Commit messages contain technical context, what was tried, and why decisions were made
+- Also check `CONTOUR_ROTATION_ISSUE.md` for detailed investigation notes
+
+### General Guidelines
 - **Start simple**: Get the hex grid math working before loading real data
 - **Test with small areas first**: Use a 3x3 hex subset before full Taiwan
 - **Validate coordinates**: Taiwan should be roughly 55 hexes N-S at 10km scale
