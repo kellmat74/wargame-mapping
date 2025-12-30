@@ -97,12 +97,6 @@ INDEX_CONTOUR_WIDTH_M = 5         # Index contour width in meters
 CONTOUR_LABEL_INTERVAL_M = 1000   # Distance between elevation labels on index contours
 CONTOUR_LABEL_SIZE_M = 25         # Contour label font size (same as hex labels)
 
-# DEM alignment offset - can be adjusted if contours don't align with OSM features
-# These correct for systematic misalignment between SRTM DEM and OSM data
-# Positive NORTHING_OFFSET shifts contours south, negative shifts north
-# Positive EASTING_OFFSET shifts contours west, negative shifts east
-DEM_NORTHING_OFFSET_M = 0         # Set to 0 by default - adjust if needed
-DEM_EASTING_OFFSET_M = -150       # Batanes DEM is shifted west of OSM, shift east to correct
 
 ROAD_COLORS = {
     "highway": "#666666",         # Dark grey (OpenTopoMap style)
@@ -765,12 +759,6 @@ def generate_contours(
 
                 # Transform to grid CRS (UTM)
                 gx, gy = transformer_to_grid.transform(x, y)
-
-                # Apply offset to correct SRTM/OSM misalignment
-                # SRTM DEM can be shifted relative to OSM data
-                gx -= DEM_EASTING_OFFSET_M
-                gy -= DEM_NORTHING_OFFSET_M
-
                 coords.append((gx, gy))
 
             if len(coords) >= 2:
