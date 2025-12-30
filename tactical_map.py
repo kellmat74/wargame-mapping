@@ -1707,124 +1707,71 @@ def render_tactical_svg(
     # Background fills entire document including bleed area
     layer_background.add(dwg.rect((0, 0), (viewbox_width_with_bleed, viewbox_height_with_bleed), fill="#404040"))
 
-    # === Early coastline/island detection ===
-    # Detect islands BEFORE rendering terrain so we can use them as base fill
-    detected_island_polygons = []
-    coastline_gdf = enhanced_features.get('coastline') if enhanced_features else None
-    if coastline_gdf is not None and not coastline_gdf.empty:
-        print("  Detecting islands from coastline...")
-        from shapely.ops import linemerge, unary_union, polygonize
-        from shapely.geometry import Polygon as ShapelyPolygon
+    # === Ocean and Land Rendering using OSM Land Polygons ===
+    # This is the official OSM approach: ocean as background, land polygons on top
+    # Much cleaner than the old approach of building polygons from coastline linestrings
+    from shapely.geometry import box as shapely_box
 
-        # Collect all coastline geometries
-        coast_lines = []
-        for _, row in coastline_gdf.iterrows():
+    # Create coverage area for data bounds (used for clipping)
+    coverage_area = shapely_box(config.data_min_x, config.data_min_y,
+                                config.data_max_x, config.data_max_y)
+
+    # Get land polygons from enhanced features
+    land_polygons_gdf = enhanced_features.get('land_polygons') if enhanced_features else None
+    has_land_polygons = land_polygons_gdf is not None and not land_polygons_gdf.empty
+
+    if has_land_polygons:
+        print("  Rendering ocean and land using OSM land polygons...")
+
+        # Layer 1a: Ocean rectangle as background (covers entire data area)
+        buffer = 2000  # 2km buffer beyond data bounds
+        ocean_bounds = box(
+            config.data_min_x - buffer,
+            config.data_min_y - buffer,
+            config.data_max_x + buffer,
+            config.data_max_y + buffer
+        )
+        water_fill = TERRAIN_COLORS["water"]
+        ext_coords = list(ocean_bounds.exterior.coords)
+        ext_svg = [to_svg(x, y) for x, y in ext_coords]
+        layer_ocean.add(dwg.polygon(
+            points=ext_svg,
+            fill=water_fill,
+            stroke="none",
+        ))
+
+        # Layer 1b: Land polygons on top of ocean
+        land_poly_count = 0
+        for _, row in land_polygons_gdf.iterrows():
             geom = row.geometry
-            if geom is None:
+            if geom is None or geom.is_empty:
                 continue
-            if geom.geom_type == 'LineString':
-                coast_lines.append(geom)
-            elif geom.geom_type == 'MultiLineString':
-                coast_lines.extend(list(geom.geoms))
-            elif geom.geom_type == 'Polygon':
-                detected_island_polygons.append(geom)
-            elif geom.geom_type == 'MultiPolygon':
-                detected_island_polygons.extend(list(geom.geoms))
 
-        # Merge coastline segments and check if they form closed rings (islands)
-        # Use unary_union first to handle overlapping/duplicate segments from multiple MGRS squares
-        if coast_lines:
-            print(f"    Processing {len(coast_lines)} coastline segments...")
-
-            # Step 1: Merge all coastlines using unary_union (handles overlaps and duplicates)
+            # Clip land polygon to coverage area
             try:
-                unified = unary_union(coast_lines)
-            except Exception as e:
-                print(f"    Warning: unary_union failed: {e}, falling back to linemerge")
-                unified = None
+                clipped = geom.intersection(coverage_area)
+            except Exception:
+                continue
 
-            if unified is not None:
-                # Extract lines from the unified geometry
-                unified_lines = []
-                if unified.geom_type == 'LineString':
-                    unified_lines = [unified]
-                elif unified.geom_type == 'MultiLineString':
-                    unified_lines = list(unified.geoms)
-                elif unified.geom_type == 'GeometryCollection':
-                    for g in unified.geoms:
-                        if g.geom_type == 'LineString':
-                            unified_lines.append(g)
-                        elif g.geom_type == 'MultiLineString':
-                            unified_lines.extend(list(g.geoms))
-
-                # Step 2: Use linemerge on unified lines
-                if unified_lines:
-                    merged_coast = linemerge(unified_lines)
-                    merged_lines = []
-                    if merged_coast.geom_type == 'LineString':
-                        merged_lines = [merged_coast]
-                    elif merged_coast.geom_type == 'MultiLineString':
-                        merged_lines = list(merged_coast.geoms)
-
-                    # Step 3: Check for closed rings
-                    for line in merged_lines:
-                        if line.is_ring:
-                            detected_island_polygons.append(ShapelyPolygon(line.coords))
-
-                    # Step 4: If no rings found, try polygonize which can handle near-closed lines
-                    if not detected_island_polygons:
-                        print("    No closed rings found, trying polygonize...")
-                        try:
-                            polygons = list(polygonize(merged_lines))
-                            detected_island_polygons.extend(polygons)
-                        except Exception as e:
-                            print(f"    Polygonize failed: {e}")
-            else:
-                # Fallback to original approach
-                merged_coast = linemerge(coast_lines)
-                merged_lines = []
-                if merged_coast.geom_type == 'LineString':
-                    merged_lines = [merged_coast]
-                elif merged_coast.geom_type == 'MultiLineString':
-                    merged_lines = list(merged_coast.geoms)
-
-                for line in merged_lines:
-                    if line.is_ring:
-                        detected_island_polygons.append(ShapelyPolygon(line.coords))
-
-        if detected_island_polygons:
-            # Sort by area (largest first) so main island renders properly
-            detected_island_polygons.sort(key=lambda p: p.area, reverse=True)
-            largest_area = detected_island_polygons[0].area if detected_island_polygons else 0
-            print(f"    Found {len(detected_island_polygons)} island polygon(s), largest: {largest_area/1e6:.2f} km²")
-
-    # Layer 1: Base terrain fill
-    # If we have islands, render them as base fill (ocean is below)
-    # Otherwise, render full playable area as base fill
-    # When rotated, use expanded data bounds to cover corners after rotation
-    if config.rotation_deg != 0:
-        # Create expanded coverage area from data bounds for rotation
-        from shapely.geometry import box as shapely_box
-        rotation_coverage = shapely_box(config.data_min_x, config.data_min_y,
-                                        config.data_max_x, config.data_max_y)
-    else:
-        rotation_coverage = None
-
-    if detected_island_polygons:
-        print("  Rendering island polygons as base terrain...")
-        # For rotated maps, clip islands to expanded area; for non-rotated, clip to playable_area
-        clip_area = rotation_coverage if rotation_coverage else playable_area
-        for island in detected_island_polygons:
-            clipped = island.intersection(clip_area)
             if clipped.is_empty:
                 continue
+
+            # Get all polygons to render
             polys_to_render = []
             if clipped.geom_type == 'Polygon':
                 polys_to_render = [clipped]
             elif clipped.geom_type == 'MultiPolygon':
                 polys_to_render = list(clipped.geoms)
+            elif clipped.geom_type == 'GeometryCollection':
+                for g in clipped.geoms:
+                    if g.geom_type == 'Polygon':
+                        polys_to_render.append(g)
+                    elif g.geom_type == 'MultiPolygon':
+                        polys_to_render.extend(list(g.geoms))
 
             for poly in polys_to_render:
+                if poly.is_empty or not poly.is_valid:
+                    continue
                 coords = list(poly.exterior.coords)
                 svg_points = [to_svg(x, y) for x, y in coords]
                 layer_terrain_open.add(dwg.polygon(
@@ -1832,9 +1779,14 @@ def render_tactical_svg(
                     fill=TERRAIN_COLORS["open"],
                     stroke="none",
                 ))
+                land_poly_count += 1
+
+        print(f"    Rendered {land_poly_count} land polygon(s)")
+
     else:
-        # No islands - use playable_area for non-rotated, expanded for rotated
-        coverage_area = rotation_coverage if rotation_coverage else playable_area
+        # Fallback: No land polygons available, render full coverage as terrain
+        # This handles inland maps with no coastline
+        print("  Rendering full coverage as base terrain (no land polygons available)...")
         if coverage_area.geom_type == "Polygon":
             coords = list(coverage_area.exterior.coords)
             svg_points = [to_svg(x, y) for x, y in coords]
@@ -1893,205 +1845,6 @@ def render_tactical_svg(
                     stroke=stroke_color,
                     stroke_width=stroke_width,
                 ))
-
-    # Render ocean polygon
-    # For island maps: ocean is a simple rectangle below the terrain (terrain covers islands)
-    # For mainland maps: use complex polygonize approach with coastlines
-    if detected_island_polygons:
-        # Island map - render simple ocean rectangle (terrain_open will cover land)
-        print("  Rendering ocean for island map...")
-        buffer = 2000  # 2km buffer beyond data bounds
-        ocean_bounds = box(
-            config.data_min_x - buffer,
-            config.data_min_y - buffer,
-            config.data_max_x + buffer,
-            config.data_max_y + buffer
-        )
-        water_fill = TERRAIN_COLORS["water"]
-        ext_coords = list(ocean_bounds.exterior.coords)
-        ext_svg = [to_svg(x, y) for x, y in ext_coords]
-        layer_ocean.add(dwg.polygon(
-            points=ext_svg,
-            fill=water_fill,
-            stroke="none",
-        ))
-        print(f"    Ocean rendered as simple rectangle (islands detected earlier)")
-
-    elif coastline_gdf is not None and not coastline_gdf.empty and dem is not None:
-        # Mainland map - use complex polygonize approach
-        print("  Creating ocean polygon from coastline (mainland approach)...")
-        try:
-            from shapely.ops import polygonize, linemerge, unary_union, snap
-            from shapely.geometry import MultiLineString, GeometryCollection
-
-            # Create a large bounding box that extends beyond the map
-            buffer = 2000  # 2km buffer beyond data bounds
-            ocean_bounds = box(
-                config.data_min_x - buffer,
-                config.data_min_y - buffer,
-                config.data_max_x + buffer,
-                config.data_max_y + buffer
-            )
-            bound_ring = ocean_bounds.exterior
-
-            # Collect coastline geometries (only lines for mainland)
-            coast_lines = []
-            for _, row in coastline_gdf.iterrows():
-                geom = row.geometry
-                if geom is None:
-                    continue
-                if geom.geom_type == 'LineString':
-                    coast_lines.append(geom)
-                elif geom.geom_type == 'MultiLineString':
-                    coast_lines.extend(list(geom.geoms))
-
-            if coast_lines:
-                # Merge connected coastline segments
-                merged_coast = linemerge(coast_lines)
-
-                # Clip coastline to our bounds
-                clipped_coast = merged_coast.intersection(ocean_bounds)
-
-                if not clipped_coast.is_empty:
-                    # Get individual coastline segments
-                    coast_segments = []
-                    if clipped_coast.geom_type == 'LineString':
-                        coast_segments.append(clipped_coast)
-                    elif clipped_coast.geom_type == 'MultiLineString':
-                        coast_segments.extend(list(clipped_coast.geoms))
-                    elif clipped_coast.geom_type == 'GeometryCollection':
-                        for g in clipped_coast.geoms:
-                            if g.geom_type == 'LineString':
-                                coast_segments.append(g)
-                            elif g.geom_type == 'MultiLineString':
-                                coast_segments.extend(list(g.geoms))
-
-                    # For each coastline segment, extend endpoints to the boundary if needed
-                    extended_segments = []
-                    snap_tolerance = 100  # 100m snap tolerance
-
-                    for seg in coast_segments:
-                        if len(seg.coords) < 2:
-                            continue
-                        coords = list(seg.coords)
-                        start_pt = Point(coords[0])
-                        end_pt = Point(coords[-1])
-
-                        # Check if endpoints are on the boundary (within tolerance)
-                        start_on_boundary = bound_ring.distance(start_pt) < snap_tolerance
-                        end_on_boundary = bound_ring.distance(end_pt) < snap_tolerance
-
-                        # If endpoints aren't on boundary, extend them
-                        new_coords = list(coords)
-                        if not start_on_boundary:
-                            # Project start point onto boundary
-                            nearest_pt = bound_ring.interpolate(bound_ring.project(start_pt))
-                            new_coords.insert(0, (nearest_pt.x, nearest_pt.y))
-                        if not end_on_boundary:
-                            # Project end point onto boundary
-                            nearest_pt = bound_ring.interpolate(bound_ring.project(end_pt))
-                            new_coords.append((nearest_pt.x, nearest_pt.y))
-
-                        extended_segments.append(LineString(new_coords))
-
-                    # Snap all lines to the boundary to ensure proper intersection
-                    all_lines = [LineString(list(bound_ring.coords))]
-                    for seg in extended_segments:
-                        snapped = snap(seg, bound_ring, snap_tolerance)
-                        all_lines.append(snapped)
-
-                    # Use polygonize to create polygons from the line network
-                    # unary_union will automatically node the lines at intersections
-                    merged_lines = unary_union(all_lines)
-                    polygons = list(polygonize(merged_lines))
-
-                    print(f"    Polygonize created {len(polygons)} polygon(s)")
-                    print(f"    Extended segments: {len(extended_segments)}, coast segments: {len(coast_segments)}")
-
-                    # Find ocean polygon(s) by checking elevation at multiple sample points
-                    ocean_polys = []
-                    transformer_to_dem = Transformer.from_crs(GRID_CRS, dem.crs, always_xy=True)
-                    dem_data = dem.read(1)
-
-                    for i, poly in enumerate(polygons):
-                        if not poly.is_valid or poly.is_empty:
-                            continue
-
-                        # Sample multiple points inside polygon for more robust detection
-                        sample_elevations = []
-
-                        # Get representative point and some boundary points
-                        test_points = [poly.representative_point()]
-
-                        # Add centroid if it's inside the polygon
-                        centroid = poly.centroid
-                        if poly.contains(centroid):
-                            test_points.append(centroid)
-
-                        # Sample along a grid within the polygon bounds
-                        bounds = poly.bounds
-                        step = min(bounds[2] - bounds[0], bounds[3] - bounds[1]) / 5
-                        if step > 100:  # At least 100m step
-                            for x in [bounds[0] + step, (bounds[0] + bounds[2]) / 2, bounds[2] - step]:
-                                for y in [bounds[1] + step, (bounds[1] + bounds[3]) / 2, bounds[3] - step]:
-                                    pt = Point(x, y)
-                                    if poly.contains(pt):
-                                        test_points.append(pt)
-
-                        # Check elevation at each sample point
-                        for test_point in test_points:
-                            dem_x, dem_y = transformer_to_dem.transform(test_point.x, test_point.y)
-                            try:
-                                row_idx, col_idx = dem.index(dem_x, dem_y)
-                                if 0 <= row_idx < dem.height and 0 <= col_idx < dem.width:
-                                    elev = dem_data[row_idx, col_idx]
-                                    sample_elevations.append(elev)
-                            except Exception:
-                                pass
-
-                        # Determine if this is ocean based on majority of samples
-                        if sample_elevations:
-                            ocean_samples = sum(1 for e in sample_elevations if e <= 1)
-                            avg_elev = sum(sample_elevations) / len(sample_elevations)
-                            is_ocean = ocean_samples > len(sample_elevations) / 2
-
-                            print(f"      Polygon {i}: area={poly.area/1e6:.2f}km², "
-                                  f"samples={len(sample_elevations)}, ocean_samples={ocean_samples}, "
-                                  f"avg_elev={avg_elev:.1f}m, is_ocean={is_ocean}")
-
-                            if is_ocean:
-                                ocean_polys.append(poly)
-                        else:
-                            # No elevation samples - polygon is outside DEM coverage
-                            # If it touches the boundary and is large, assume it's ocean
-                            touches_boundary = poly.intersects(bound_ring)
-                            area_km2 = poly.area / 1e6
-                            # Assume large polygons outside DEM that touch boundary are ocean
-                            is_ocean = touches_boundary and area_km2 > 1.0
-                            print(f"      Polygon {i}: area={area_km2:.2f}km², "
-                                  f"NO DEM SAMPLES, touches_boundary={touches_boundary}, is_ocean={is_ocean}")
-                            if is_ocean:
-                                ocean_polys.append(poly)
-
-                    if ocean_polys:
-                        print(f"    Rendering {len(ocean_polys)} ocean polygon(s)")
-                        water_fill = TERRAIN_COLORS["water"]
-
-                        for ocean_poly in ocean_polys:
-                            coords = list(ocean_poly.exterior.coords)
-                            svg_points = [to_svg(x, y) for x, y in coords]
-                            layer_ocean.add(dwg.polygon(
-                                points=svg_points,
-                                fill=water_fill,
-                                stroke="none",
-                            ))
-                    else:
-                        print("    No ocean polygons identified (none at sea level)")
-
-        except Exception as e:
-            import traceback
-            print(f"    Error creating ocean polygon: {e}")
-            traceback.print_exc()
 
     # === Enhanced Features Rendering ===
     if enhanced_features:
@@ -3640,6 +3393,139 @@ GEOFABRIK_TO_COUNTRY = {
 }
 
 
+# OSM Land Polygons - Official pre-built land/ocean polygons from OpenStreetMap
+# These are much cleaner than building polygons from coastline linestrings
+# Source: https://osmdata.openstreetmap.de/data/land-polygons.html
+LAND_POLYGONS_URL = "https://osmdata.openstreetmap.de/download/land-polygons-split-4326.zip"
+LAND_POLYGONS_CACHE = Path("cache/land-polygons-split-4326")
+
+
+def download_land_polygons() -> bool:
+    """Download and extract OSM land polygons shapefile if not already cached.
+
+    The land-polygons-split-4326 dataset contains pre-built land polygons for
+    the entire world. This is the official OSM approach for rendering ocean/land
+    and is much cleaner than building polygons from coastline linestrings.
+
+    The shapefile is ~800MB compressed, ~3GB extracted. It's downloaded once
+    and cached for all future map generation.
+
+    Returns:
+        True if land polygons are available (already cached or successfully downloaded)
+    """
+    import requests
+    import zipfile
+
+    shapefile_path = LAND_POLYGONS_CACHE / "land_polygons.shp"
+
+    if shapefile_path.exists():
+        return True
+
+    print("Downloading OSM land polygons (one-time ~800MB download)...")
+    print("  This is the official OSM dataset for rendering land/ocean boundaries")
+    print("  Source: https://osmdata.openstreetmap.de/data/land-polygons.html")
+
+    # Create cache directory
+    LAND_POLYGONS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+
+    # Download the zip file
+    zip_path = LAND_POLYGONS_CACHE.parent / "land-polygons-split-4326.zip"
+
+    try:
+        response = requests.get(LAND_POLYGONS_URL, stream=True, timeout=3600)
+        response.raise_for_status()
+
+        total_size = int(response.headers.get('content-length', 0))
+        downloaded = 0
+        last_percent = -1
+
+        with open(zip_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+                downloaded += len(chunk)
+                if total_size > 0:
+                    percent = int(downloaded * 100 / total_size)
+                    if percent != last_percent and percent % 10 == 0:
+                        print(f"  Downloaded {percent}%...")
+                        last_percent = percent
+
+        print("  Extracting...")
+
+        # Extract the zip file
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            # The zip contains a directory "land-polygons-split-4326"
+            zip_ref.extractall(LAND_POLYGONS_CACHE.parent)
+
+        # Clean up zip file
+        zip_path.unlink()
+
+        if shapefile_path.exists():
+            print("  Land polygons ready!")
+            return True
+        else:
+            print("  Error: Shapefile not found after extraction")
+            return False
+
+    except Exception as e:
+        print(f"  Error downloading land polygons: {e}")
+        if zip_path.exists():
+            zip_path.unlink()
+        return False
+
+
+def load_land_polygons_for_bounds(
+    min_lon: float, min_lat: float,
+    max_lon: float, max_lat: float,
+    target_crs: str = GRID_CRS
+) -> gpd.GeoDataFrame:
+    """Load land polygons from the cached OSM dataset for a specific bounding box.
+
+    Uses GeoPandas spatial filtering to only load polygons that intersect
+    the requested bounds, rather than loading the entire global dataset.
+
+    Args:
+        min_lon, min_lat, max_lon, max_lat: Bounding box in WGS84 (EPSG:4326)
+        target_crs: CRS to reproject the result to (default: UTM)
+
+    Returns:
+        GeoDataFrame with land polygons clipped to bounds and reprojected
+    """
+    shapefile_path = LAND_POLYGONS_CACHE / "land_polygons.shp"
+
+    if not shapefile_path.exists():
+        if not download_land_polygons():
+            return gpd.GeoDataFrame()
+
+    try:
+        # Create bounding box for spatial filter
+        # Add small buffer to ensure we get all intersecting polygons
+        buffer = 0.1  # degrees
+        bbox = (
+            min_lon - buffer,
+            min_lat - buffer,
+            max_lon + buffer,
+            max_lat + buffer
+        )
+
+        # Load only polygons that intersect our bounding box
+        land_gdf = gpd.read_file(shapefile_path, bbox=bbox)
+
+        if land_gdf.empty:
+            print("    No land polygons found in bounds")
+            return gpd.GeoDataFrame()
+
+        # Reproject to target CRS
+        if land_gdf.crs and land_gdf.crs.to_string() != target_crs:
+            land_gdf = land_gdf.to_crs(target_crs)
+
+        print(f"    Loaded {len(land_gdf)} land polygon(s) for map area")
+        return land_gdf
+
+    except Exception as e:
+        print(f"    Error loading land polygons: {e}")
+        return gpd.GeoDataFrame()
+
+
 def download_coastline_for_region(data_path: Path, bounds_file: Path) -> bool:
     """Download coastline data from OSM Overpass API for a region.
 
@@ -3997,6 +3883,17 @@ def main():
     # Use larger buffer for coastline to ensure complete island rings are detected
     coastline = load_optional_features(config, "coastline.geojson", "coastline", buffer_m=5000)
 
+    # Load OSM land polygons for cleaner ocean/land rendering
+    # This is the official OSM approach - much cleaner than building polygons from coastlines
+    print("Loading land polygons...")
+    transformer_to_wgs84 = Transformer.from_crs(GRID_CRS, WGS84, always_xy=True)
+    data_min_lon, data_min_lat = transformer_to_wgs84.transform(config.data_min_x, config.data_min_y)
+    data_max_lon, data_max_lat = transformer_to_wgs84.transform(config.data_max_x, config.data_max_y)
+    land_polygons = load_land_polygons_for_bounds(
+        data_min_lon, data_min_lat, data_max_lon, data_max_lat,
+        target_crs=GRID_CRS
+    )
+
     # Load new features (added for tactical relevance)
     mangrove = load_optional_features(config, "mangrove.geojson", "mangrove")
     wetland = load_optional_features(config, "wetland.geojson", "wetland")
@@ -4043,6 +3940,7 @@ def main():
         'cliffs': cliffs,
         'waterways_area': waterways_area,
         'coastline': coastline,
+        'land_polygons': land_polygons,
         'reference_tiles': reference_tiles,
         # New tactical features
         'mangrove': mangrove,

@@ -212,7 +212,35 @@ Yonaguni now works correctly with:
 - 300m map-relative shift (110° bearing = ESE)
 - Multi-MGRS-square data from 4 squares: 51R/VG, VH, WG, WH
 - 101 contour segments (merged from all squares)
-- 31 island polygons detected, largest 28.91 km²
+- ~~31 island polygons detected, largest 28.91 km²~~ **Now using OSM land polygons (33 polygons)**
+
+---
+
+### Session 7 (2025-12-30 - OSM Land Polygons)
+
+**Problem**: The old approach for rendering ocean/land was overly complex:
+- Built polygons from coastline linestrings using `linemerge` and `polygonize`
+- Used elevation sampling to determine which polygons were ocean vs land
+- Created "hundreds of ocean objects" on some maps (user complaint)
+- Different code paths for island vs mainland maps
+
+**Solution**: Switched to official OSM land polygons approach:
+- Download pre-built land polygons from https://osmdata.openstreetmap.de/data/land-polygons.html
+- `land-polygons-split-4326.zip` (~800MB, one-time download, cached in `cache/`)
+- Simple rendering: ocean rectangle as background, land polygons on top
+- No more complex coastline processing or elevation sampling
+- Same code path for both island and mainland maps
+
+**Key changes**:
+1. Added `download_land_polygons()` - downloads and caches OSM land polygons (~800MB)
+2. Added `load_land_polygons_for_bounds()` - loads land polygons for specific bounding box using GeoPandas spatial filtering
+3. Simplified `render_tactical_svg()` - removed ~200 lines of complex coastline/ocean polygon code
+4. Added `land_polygons` to enhanced_features dict
+
+**Results**:
+- Yonaguni: 33 land polygons (clean, simple)
+- El Nido: 4 land polygons after clipping (clean, simple)
+- Code is much simpler and more maintainable
 
 ---
 
