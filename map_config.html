@@ -448,7 +448,7 @@
                                 <li>MGRS: 51PTT1234567890 or 51P TT 12345 67890</li>
                             </ul>
                         </li>
-                        <li>Adjust <strong>Rotation</strong> if needed (0° = North is up)</li>
+                        <li>Adjust <strong>Bearing at Top</strong> if needed (0° = North up, 90° = East up, etc.)</li>
                     </ul>
 
                     <p style="margin: 0 0 15px 0;"><strong style="color: #00d4ff;">Step 2: Generate</strong></p>
@@ -540,15 +540,16 @@
 
         <!-- Step 1: Rotation -->
         <div class="panel">
-            <h2>Step 1: Rotation (Optional)</h2>
+            <h2>Step 1: Bearing at Top (Optional)</h2>
             <div class="rotation-control">
-                <span style="color: #888; font-size: 12px;">-180&deg;</span>
-                <input type="range" id="rotationSlider" min="-180" max="180" value="0">
-                <span style="color: #888; font-size: 12px;">180&deg;</span>
-                <div class="rotation-value"><span id="rotationValue">0</span>&deg;</div>
+                <span style="color: #888; font-size: 12px;">0&deg;</span>
+                <input type="range" id="rotationSlider" min="0" max="359" value="0">
+                <span style="color: #888; font-size: 12px;">359&deg;</span>
+                <div class="rotation-value"><span id="rotationValue">0</span>&deg; <span id="rotationDirection" style="color: #888;">(North)</span></div>
             </div>
             <div style="text-align: center; margin-top: 10px; font-size: 12px; color: #888;">
-                Positive = clockwise, Negative = counter-clockwise (0° = North is up)
+                What compass bearing should point to the top of the map?<br>
+                0° = North, 90° = East, 180° = South, 270° = West
             </div>
         </div>
 
@@ -1024,7 +1025,7 @@
         const state = {
             centerLat: 24.1477,
             centerLon: 120.6736,
-            rotation: 0,
+            bearingAtTop: 0,    // What compass bearing points to top of map (0=North, 90=East, etc.)
             region: '', // Auto-detect by default
             mapName: 'tactical_map',
             shiftNorth: 0,      // Geographic shift tracking (for display)
@@ -1034,6 +1035,19 @@
             requiredSquares: [],
             availableRegions: []
         };
+
+        // Helper to convert bearing to direction name
+        function bearingToDirection(bearing) {
+            const directions = ['North', 'NNE', 'NE', 'ENE', 'East', 'ESE', 'SE', 'SSE',
+                               'South', 'SSW', 'SW', 'WSW', 'West', 'WNW', 'NW', 'NNW'];
+            const index = Math.round(((bearing % 360) + 360) % 360 / 22.5) % 16;
+            return directions[index];
+        }
+
+        // Convert bearingAtTop to internal rotation_deg (for backend)
+        function bearingToRotation(bearing) {
+            return -bearing;  // Simple: if 60° at top, rotate map -60°
+        }
 
         // Known available regions (will be populated)
         // In a real app, this could be loaded from a server or local file
@@ -1055,7 +1069,7 @@
             state.requiredSquares = getRequiredMGRSSquares(
                 state.centerLat,
                 state.centerLon,
-                state.rotation
+                bearingToRotation(state.bearingAtTop)
             );
 
             const container = document.getElementById('mgrsSquares');
@@ -1139,9 +1153,13 @@
                 ? `\n<span class="label">Position Adjusted:</span> <span class="value">${formatShift(state.mapShiftUp, '↑', '↓')}, ${formatShift(state.mapShiftRight, '→', '←')}</span>`
                 : '';
 
+            const bearingDisplay = state.bearingAtTop === 0
+                ? '0° (North up)'
+                : `${state.bearingAtTop}° (${bearingToDirection(state.bearingAtTop)} at top)`;
+
             display.innerHTML = `
 <span class="label">Center:</span> <span class="value coords">${state.centerLat.toFixed(6)}&deg;N, ${state.centerLon.toFixed(6)}&deg;E</span>
-<span class="label">Rotation:</span> <span class="value">${state.rotation}&deg; ${state.rotation >= 0 ? 'clockwise' : 'counter-clockwise'}</span>
+<span class="label">Bearing at Top:</span> <span class="value">${bearingDisplay}</span>
 <span class="label">Region:</span> <span class="value">${effectiveRegion}</span>
 <span class="label">Map Name:</span> <span class="value">${state.mapName}</span>${shiftInfo}
             `.trim();
@@ -1164,25 +1182,23 @@
 
         function shift(direction) {
             const distance = getShiftDistance();
-            const rotation = state.rotation || 0;
 
-            // Calculate bearing based on map-relative direction and rotation
-            // rotation_deg is positive for CW rotation (map turns CW, so "up" on map points to bearing = -rotation)
-            // At 0° rotation: up=N(0°), right=E(90°), down=S(180°), left=W(270°)
-            // At -20° rotation (CCW): up=NNE(20°), right=ESE(110°), etc.
+            // Calculate bearing based on map-relative direction
+            // bearingAtTop = the compass bearing that points to top of map
+            // So "up" on the map = move toward bearingAtTop
             let bearing;
             switch(direction) {
                 case 'up':
-                    bearing = -rotation;  // Up on rotated map
+                    bearing = state.bearingAtTop;  // Up = toward bearing at top
                     break;
                 case 'down':
-                    bearing = -rotation + 180;  // Down on rotated map
+                    bearing = state.bearingAtTop + 180;  // Down = opposite
                     break;
                 case 'right':
-                    bearing = -rotation + 90;  // Right on rotated map
+                    bearing = state.bearingAtTop + 90;  // Right = 90° clockwise from top
                     break;
                 case 'left':
-                    bearing = -rotation + 270;  // Left on rotated map
+                    bearing = state.bearingAtTop + 270;  // Left = 90° counter-clockwise from top
                     break;
                 default:
                     return;
@@ -1233,7 +1249,7 @@
                 center_lat: state.centerLat,
                 center_lon: state.centerLon,
                 region: effectiveRegion,
-                rotation_deg: state.rotation
+                rotation_deg: bearingToRotation(state.bearingAtTop)
             };
 
             // Add adjustment notes if any map-relative shifts were made
@@ -1276,7 +1292,7 @@ config = MapConfig(
     center_lat=${state.centerLat.toFixed(6)},
     center_lon=${state.centerLon.toFixed(6)},
     region="${effectiveRegion}",
-    rotation_deg=${state.rotation},
+    rotation_deg=${bearingToRotation(state.bearingAtTop)},  # ${state.bearingAtTop}° at top
 )
 
 # Required MGRS squares: ${state.requiredSquares.map(sq => sq.full).join(', ')}
@@ -1300,7 +1316,7 @@ config = MapConfig(
         function resetToDefaults() {
             state.centerLat = 24.1477;
             state.centerLon = 120.6736;
-            state.rotation = 0;
+            state.bearingAtTop = 0;
             state.region = '';
             state.autoRegion = '';
             state.mapName = 'tactical_map';
@@ -1312,8 +1328,9 @@ config = MapConfig(
             document.getElementById('coordPaste').value = '';
             document.getElementById('centerLat').value = state.centerLat;
             document.getElementById('centerLon').value = state.centerLon;
-            document.getElementById('rotationSlider').value = state.rotation;
-            document.getElementById('rotationValue').textContent = state.rotation;
+            document.getElementById('rotationSlider').value = state.bearingAtTop;
+            document.getElementById('rotationValue').textContent = state.bearingAtTop;
+            document.getElementById('rotationDirection').textContent = '(North)';
             document.getElementById('mapName').value = state.mapName;
 
             document.getElementById('commandOutput').classList.remove('visible');
@@ -1398,7 +1415,7 @@ config = MapConfig(
                 center_lat: state.centerLat,
                 center_lon: state.centerLon,
                 region: effectiveRegion,
-                rotation_deg: state.rotation
+                rotation_deg: bearingToRotation(state.bearingAtTop)
             };
 
             // Show progress container
@@ -1580,10 +1597,11 @@ config = MapConfig(
                 updateDisplay();
             });
 
-            // Rotation slider
+            // Bearing at top slider
             document.getElementById('rotationSlider').addEventListener('input', (e) => {
-                state.rotation = parseInt(e.target.value);
-                document.getElementById('rotationValue').textContent = state.rotation;
+                state.bearingAtTop = parseInt(e.target.value);
+                document.getElementById('rotationValue').textContent = state.bearingAtTop;
+                document.getElementById('rotationDirection').textContent = `(${bearingToDirection(state.bearingAtTop)})`;
                 updateDisplay();
             });
 
