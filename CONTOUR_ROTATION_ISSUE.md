@@ -112,7 +112,7 @@ The `render_tactical_svg` function is **~2200 lines**.
 - `render_roads()`
 - `create_hex_polygon_svg()`
 
-**Remaining**: Integrate these into the main function to reduce its size.
+**Integrated**: Local function definitions in `render_tactical_svg` now delegate to these helpers, reducing ~95 lines of duplicated code.
 
 ### 2. Coordinate System Complexity
 **Implemented**: Created `CoordinateTransformer` class in `map_utils.py`:
@@ -167,11 +167,17 @@ The `render_tactical_svg` function is **~2200 lines**.
 - Added 44 pytest tests
 - Updated MapConfig with helper properties
 
+### Session 5 (2025-12-30 - Integration)
+- Integrated render_helpers into render_tactical_svg
+- Reduced ~95 lines of duplicated code
+- All 44 tests still passing
+
 ### Git Commits
 1. `fb4cf92` - Add DEM alignment offset and document contour rotation issue
 2. `a452663` - Add utility classes and pytest infrastructure for code cleanup
 3. `2770612` - Add render_helpers module with extracted rendering functions
 4. `0a4f442` - Update issue documentation
+5. `e10ea13` - Integrate render_helpers into render_tactical_svg
 
 ---
 
@@ -182,9 +188,6 @@ The `render_tactical_svg` function is **~2200 lines**.
 2. **Try larger DEM offset values** - Maybe -150m isn't enough
 3. **Consider per-region offset configuration** - Different regions may need different corrections
 4. **Try alternative DEM source** - ASTER GDEM or other sources may have better alignment
-
-### Code Integration
-1. **Integrate render_helpers into render_tactical_svg** - Use extracted functions to reduce main function size
 
 ### Debug Scripts (Not Committed)
 - `debug_contour_offset.py` - Verify DEM offset application
