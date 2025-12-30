@@ -130,8 +130,8 @@ HEX_MARKER_RADIUS_M = 12          # Hex center circle radius in meters
 # Print layout settings (fixed document dimensions)
 TRIM_WIDTH_IN = 34.0              # Trim width in inches (final printed width)
 TRIM_HEIGHT_IN = 22.0             # Trim height in inches (final printed height)
-PLAY_MARGIN_TOP_IN = 0.25         # Margin from trim to top hex row (inches)
-PLAY_MARGIN_BOTTOM_IN = 0.25      # Margin from trim to bottom hex row (inches)
+PLAY_MARGIN_TOP_IN = 0.0          # Margin from trim to top hex row (inches)
+PLAY_MARGIN_BOTTOM_IN = 0.0       # Margin from trim to bottom hex row (inches)
 PLAY_MARGIN_LEFT_IN = 0.0         # Margin from trim to left hex points (inches)
 PLAY_MARGIN_RIGHT_IN = 0.0        # Margin from trim to right hex points (inches)
 DATA_MARGIN_IN = 1.25             # Margin outside bleed for data elements (inches)
@@ -328,8 +328,11 @@ class MapConfig:
         row_spacing = HEX_SIZE_M
 
         # Map dimensions in meters
+        # Width: leftmost vertex to rightmost vertex
         width_m = (GRID_WIDTH - 1) * col_spacing + 2 * size
-        height_m = GRID_HEIGHT * row_spacing
+        # Height: For offset hex grids, odd columns are shifted down by row_spacing/2
+        # So visual height = rows * row_spacing + row_spacing/2 (for the odd column extension)
+        height_m = GRID_HEIGHT * row_spacing + row_spacing / 2
 
         # Bounds centered on center point
         self.min_x = self.center_x - width_m / 2
@@ -366,7 +369,8 @@ class MapConfig:
         row_spacing = HEX_SIZE_M
 
         width_m = (GRID_WIDTH - 1) * col_spacing + 2 * size
-        height_m = GRID_HEIGHT * row_spacing
+        # Height: For offset hex grids, odd columns are shifted down by row_spacing/2
+        height_m = GRID_HEIGHT * row_spacing + row_spacing / 2
 
         self.min_x = self.center_x - width_m / 2
         self.max_x = self.center_x + width_m / 2
@@ -1173,8 +1177,19 @@ def render_tactical_svg(
     # === NEW LAYOUT: Fixed 34" x 22" trim with data elements outside bleed ===
 
     # Hex grid dimensions in meters (at current HEX_SIZE_M)
-    hex_grid_width = config.max_x - config.min_x   # Width of hex grid
-    hex_grid_height = config.max_y - config.min_y  # Height of hex grid
+    # config.min/max already define the VISUAL bounds (including vertices)
+    # calculated in calculate_bounds() as: width_m = (GRID_WIDTH-1)*col_spacing + 2*size
+    # So we don't need additional vertex extensions - they're already included.
+    hex_vertex_extend_h = 0  # No additional extension needed - bounds include vertices
+    hex_vertex_extend_v = 0  # No additional extension needed - bounds include vertices
+
+    # Grid dimensions based on hex CENTERS (for scaling - maximizes hex size)
+    hex_grid_center_width = config.max_x - config.min_x
+    hex_grid_center_height = config.max_y - config.min_y
+
+    # Visual bounds including vertex extensions (for positioning only)
+    hex_grid_width = hex_grid_center_width + 2 * hex_vertex_extend_h
+    hex_grid_height = hex_grid_center_height + 2 * hex_vertex_extend_v
 
     # Play area (where hexes fit) = trim minus top/bottom margins
     play_width_in = TRIM_WIDTH_IN - PLAY_MARGIN_LEFT_IN - PLAY_MARGIN_RIGHT_IN
@@ -1346,11 +1361,16 @@ def render_tactical_svg(
         - bleed_m: print bleed
         - play_margin: space between trim edge and hex grid
         - center_offset: centering within play area
+
+        Note: Vertex extensions are already accounted for in the scaling calculation
+        (hex_grid_width/height include them), so we don't add them as offsets here.
+        The hex centers are offset by the vertex extension so vertices reach the edges.
         """
-        # X: offset by data margin, bleed, play margin (left), and centering
-        svg_x = (x - config.min_x) + content_offset_m + play_margin_left_m + center_offset_x_m
-        # Y: inverted, offset by data margin, bleed, play margin (top), and centering
-        svg_y = (config.max_y - y) + content_offset_m + play_margin_top_m + center_offset_y_m
+        # X: offset by data margin, bleed, play margin (left), centering, and vertex extension
+        # The vertex extension shifts all hex centers right so leftmost vertex aligns with play area left edge
+        svg_x = (x - config.min_x) + hex_vertex_extend_h + content_offset_m + play_margin_left_m + center_offset_x_m
+        # Y: inverted, offset by data margin, bleed, play margin (top), centering, and vertex extension
+        svg_y = (config.max_y - y) + hex_vertex_extend_v + content_offset_m + play_margin_top_m + center_offset_y_m
         return (svg_x, svg_y)
 
     # Create playable area boundary (union of all hex polygons)
@@ -2569,8 +2589,8 @@ def render_tactical_svg(
             hex_boundary = playable_svg_poly.convex_hull.exterior
             hex_boundary_poly = playable_svg_poly.convex_hull
 
-        # Label offset from boundary (into margin)
-        label_offset = 25
+        # Label offset along the line from boundary (into hex grid)
+        label_inset = 60  # Distance along line to move label inside hex grid
 
         # Bounds for label visibility (must be within viewBox with padding)
         label_min_x = 10
@@ -2651,13 +2671,30 @@ def render_tactical_svg(
                             int_points = []
 
                         for ix, iy in int_points:
-                            # Offset label away from center
-                            dx = ix - rot_cx
-                            dy = iy - rot_cy
-                            dist = math.sqrt(dx*dx + dy*dy)
-                            if dist > 0:
-                                ox = ix + (dx / dist) * label_offset
-                                oy = iy + (dy / dist) * label_offset
+                            # Move label along the line direction (into hex grid)
+                            # Get line direction from rotated points
+                            if len(rotated_points) >= 2:
+                                lx1, ly1 = rotated_points[0]
+                                lx2, ly2 = rotated_points[-1]
+                                line_dx = lx2 - lx1
+                                line_dy = ly2 - ly1
+                                line_len = math.sqrt(line_dx*line_dx + line_dy*line_dy)
+                                if line_len > 0:
+                                    # Normalize line direction
+                                    line_dx /= line_len
+                                    line_dy /= line_len
+                                    # Determine which direction is "into" the grid (toward center)
+                                    to_center_dx = rot_cx - ix
+                                    to_center_dy = rot_cy - iy
+                                    # Dot product to see which line direction points toward center
+                                    dot = line_dx * to_center_dx + line_dy * to_center_dy
+                                    if dot < 0:
+                                        line_dx, line_dy = -line_dx, -line_dy
+                                    # Move along line into hex grid
+                                    ox = ix + line_dx * label_inset
+                                    oy = iy + line_dy * label_inset
+                                else:
+                                    ox, oy = ix, iy
                             else:
                                 ox, oy = ix, iy
 
@@ -2727,13 +2764,30 @@ def render_tactical_svg(
                             int_points = []
 
                         for ix, iy in int_points:
-                            # Offset label away from center
-                            dx = ix - rot_cx
-                            dy = iy - rot_cy
-                            dist = math.sqrt(dx*dx + dy*dy)
-                            if dist > 0:
-                                ox = ix + (dx / dist) * label_offset
-                                oy = iy + (dy / dist) * label_offset
+                            # Move label along the line direction (into hex grid)
+                            # Get line direction from rotated points
+                            if len(rotated_points) >= 2:
+                                lx1, ly1 = rotated_points[0]
+                                lx2, ly2 = rotated_points[-1]
+                                line_dx = lx2 - lx1
+                                line_dy = ly2 - ly1
+                                line_len = math.sqrt(line_dx*line_dx + line_dy*line_dy)
+                                if line_len > 0:
+                                    # Normalize line direction
+                                    line_dx /= line_len
+                                    line_dy /= line_len
+                                    # Determine which direction is "into" the grid (toward center)
+                                    to_center_dx = rot_cx - ix
+                                    to_center_dy = rot_cy - iy
+                                    # Dot product to see which line direction points toward center
+                                    dot = line_dx * to_center_dx + line_dy * to_center_dy
+                                    if dot < 0:
+                                        line_dx, line_dy = -line_dx, -line_dy
+                                    # Move along line into hex grid
+                                    ox = ix + line_dx * label_inset
+                                    oy = iy + line_dy * label_inset
+                                else:
+                                    ox, oy = ix, iy
                             else:
                                 ox, oy = ix, iy
 
@@ -2757,7 +2811,8 @@ def render_tactical_svg(
     transformer_to_wgs84 = Transformer.from_crs(GRID_CRS, WGS84, always_xy=True)
     transformer_to_utm = Transformer.from_crs(GRID_CRS, config.utm_crs, always_xy=True)
 
-    # Calculate hex grid origin in SVG coordinates
+    # Calculate hex grid visual origin in SVG coordinates
+    # This is the top-left corner of the visual hex grid (including vertex extensions)
     hex_grid_svg_x = content_offset_m + play_margin_left_m + center_offset_x_m
     hex_grid_svg_y = content_offset_m + play_margin_top_m + center_offset_y_m
 
