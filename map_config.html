@@ -454,8 +454,15 @@
                     <p style="margin: 0 0 15px 0;"><strong style="color: #00d4ff;">Step 2: Generate</strong></p>
                     <ul style="margin: 0 0 15px 0; padding-left: 20px;">
                         <li>Click <strong>Generate Map</strong> to create your map</li>
-                        <li>Data is downloaded automatically if not present</li>
+                        <li>MGRS data is extracted automatically from country PBFs</li>
                         <li>Progress is shown in real-time below the button</li>
+                    </ul>
+
+                    <p style="margin: 0 0 10px 0;"><strong style="color: #ff6b6b;">Prerequisite: Country Data</strong></p>
+                    <ul style="margin: 0 0 15px 0; padding-left: 20px; font-size: 12px;">
+                        <li>Download the country PBF once from <a href="https://download.geofabrik.de/asia.html" target="_blank" style="color: #00d4ff;">Geofabrik</a></li>
+                        <li>Save to: <code style="background: #1a1a2e; padding: 2px 6px; border-radius: 3px;">data/geofabrik/{country}-latest.osm.pbf</code></li>
+                        <li>Available: japan, taiwan, philippines, south-korea, indonesia, vietnam, thailand</li>
                     </ul>
 
                     <p style="margin: 0 0 10px 0;"><strong style="color: #00d4ff;">Step 3: Find Your Output</strong></p>
@@ -549,8 +556,8 @@
                     <!-- Populated by JS -->
                 </div>
                 <div style="font-size: 11px; color: #888; margin-top: 10px;">
-                    Data is downloaded automatically when you click Generate Map.<br>
-                    To regenerate with new settings, just update the values above and click Generate Map again (no refresh needed).
+                    MGRS data is extracted automatically from country PBFs in <code>data/geofabrik/</code>.<br>
+                    To regenerate with new settings, just update the values above and click Generate Map again.
                 </div>
             </div>
         </div>
