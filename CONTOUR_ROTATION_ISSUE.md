@@ -423,3 +423,102 @@ This variation suggests the DEM misalignment is not perfectly uniform, possibly 
 - Different SRTM tiles with different alignment
 - Non-linear distortion in the DEM
 - Coastal cliffs causing apparent misalignment (legitimate elevation at cliff edges)
+
+---
+
+## Session 4: Code Refactoring (2025-12-30)
+
+### Summary
+Implemented all code cleanup recommendations from this document. The DEM offset fix (-150m easting) did not produce visible improvement in the contour alignment, suggesting the root cause may be more complex than simple DEM misalignment.
+
+### New Files Created
+
+#### 1. `map_utils.py` - Utility Classes
+```python
+# Key classes:
+- Bounds: Dataclass for rectangular bounds (min_x, max_x, min_y, max_y)
+  - Properties: width, height, center
+  - Methods: contains(), expand(), as_tuple()
+
+- RotationConfig: Centralized rotation handling
+  - Properties: angle_rad, is_rotated, cos_angle, sin_angle
+  - Methods: rotate_point(), calculate_expanded_bounds(), get_svg_transform()
+
+- CoordinateTransformer: Unified coordinate transformations
+  - Methods: utm_to_svg(), svg_to_utm(), wgs84_to_utm(), utm_to_wgs84(), wgs84_to_svg()
+
+- LayerManager: SVG layer registration and z-ordering
+  - Methods: register_layer(), get_layer(), get_layers_by_z_order()
+  - get_rotating_layers(), get_fixed_layers(), assemble_into_group()
+
+- LayerZOrder: Constants for standard z-order values (BACKGROUND=0 through PRINT_GUIDES=3020)
+```
+
+#### 2. `render_helpers.py` - Rendering Functions
+```python
+# Extracted functions for rendering:
+- get_point_and_angle_at_distance(line_coords, target_distance) -> (x, y, angle)
+- get_line_length(line_coords) -> float
+- render_polygons(gdf, layer, dwg, fill_color, to_svg, ...) -> count
+- render_linestrings(gdf, layer, dwg, color, width, to_svg, ...) -> count
+- render_contours(contours, layer_regular, layer_index, layer_labels, ...) -> (contour_count, label_count)
+- render_roads(roads_gdf, road_layers, dwg, to_svg, ...) -> Dict[str, int]
+- create_hex_polygon_svg(center_x, center_y, size, to_svg) -> List[Tuple]
+```
+
+#### 3. `tests/` - Pytest Test Suite
+- `tests/__init__.py`
+- `tests/test_map_utils.py` - 29 tests for utility classes
+- `tests/test_render_helpers.py` - 15 tests for render helpers
+- **Total: 44 passing tests**
+
+### Changes to `tactical_map.py`
+1. Added import for new utility classes:
+   ```python
+   from map_utils import Bounds, RotationConfig, CoordinateTransformer, LayerManager, LayerZOrder
+   ```
+
+2. Added helper properties to MapConfig:
+   ```python
+   @property
+   def map_bounds(self) -> Bounds:
+       """Get map bounds as a Bounds object."""
+
+   @property
+   def data_bounds(self) -> Bounds:
+       """Get expanded data bounds as a Bounds object."""
+
+   def get_rotation_config(self, center_x, center_y) -> RotationConfig:
+       """Get a RotationConfig for the given SVG rotation center."""
+
+   def create_coordinate_transformer(self, svg_offset_x, svg_offset_y) -> CoordinateTransformer:
+       """Create a CoordinateTransformer for this map configuration."""
+   ```
+
+### Git Commits Made
+1. `fb4cf92` - Add DEM alignment offset and document contour rotation issue
+2. `a452663` - Add utility classes and pytest infrastructure for code cleanup
+3. `2770612` - Add render_helpers module with extracted rendering functions
+
+### Remaining Work
+1. **Integrate render_helpers into render_tactical_svg** - The helper functions exist but haven't been integrated into the main 2200-line function yet
+2. **Root cause of contour offset still unknown** - The -150m DEM easting offset didn't visibly improve alignment
+3. **Consider alternative approaches**:
+   - Different DEM source for Batanes
+   - Per-region offset configuration
+   - Manual contour adjustment based on coastline matching
+
+### Debug Scripts Created (not committed)
+- `debug_contour_offset.py` - Verify DEM offset is being applied
+- `debug_coverage_gap.py` - Find gaps in contour coverage
+- `debug_dem_alignment.py` - Check DEM alignment with coastline
+- `debug_svg_coords.py` - Compare SVG coordinates
+- `debug_svg_rotation.py` - Analyze rotation effects
+- `debug_svg_structure.py` - Analyze SVG structure
+- `debug_xy_offset.py` - Analyze X/Y offset patterns
+
+### Key Technical Findings
+1. **SVG structure is correct** - Both coastline and contours have identical transform chains
+2. **DEM-OSM misalignment confirmed** - 23% of Batanes coastline points show elevation ≥20m vs only 4.5% for Yonaguni
+3. **Measured offset (~100m) doesn't match reported offset (~1.5km)** - Suggests either measurement methodology issue or additional factors
+4. **Offset varies by location** - Not a simple uniform shift, possibly multiple SRTM tiles with different alignment
