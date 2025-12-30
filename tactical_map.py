@@ -10,6 +10,7 @@ Generates US Army military-style maps with:
 
 import json
 import math
+import subprocess
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Tuple, List, Optional
@@ -28,6 +29,7 @@ import svgwrite
 # === Configuration ===
 DATA_DIR = Path("data")
 OUTPUT_DIR = Path("output")
+GEOFABRIK_DIR = DATA_DIR / "geofabrik"
 
 # Grid parameters
 HEX_SIZE_M = 250  # 250m hex (flat edge to flat edge)
@@ -3402,6 +3404,86 @@ def load_config_from_file() -> Optional[MapConfig]:
     return config
 
 
+def get_available_country_pbfs() -> List[Tuple[str, Path]]:
+    """Get list of available country PBF files in geofabrik directory.
+
+    Returns list of (region_name, path) tuples, sorted by file size (smallest first).
+    """
+    if not GEOFABRIK_DIR.exists():
+        return []
+
+    pbfs = []
+    for pbf_file in GEOFABRIK_DIR.glob("*-latest.osm.pbf"):
+        # Extract region name from filename (e.g., "japan-latest.osm.pbf" -> "japan")
+        region = pbf_file.stem.replace("-latest.osm", "")
+        pbfs.append((region, pbf_file))
+
+    # Sort by file size (try smaller files first for faster failure)
+    pbfs.sort(key=lambda x: x[1].stat().st_size)
+    return pbfs
+
+
+def auto_extract_mgrs_data(config: 'MapConfig') -> bool:
+    """Try to extract MGRS data from available country PBFs.
+
+    Returns True if extraction succeeded, False otherwise.
+    """
+    available_pbfs = get_available_country_pbfs()
+
+    if not available_pbfs:
+        return False
+
+    # Parse region to get GZD and square
+    parts = config.region.split("/")
+    if len(parts) != 2:
+        print(f"  Invalid region format: {config.region}")
+        return False
+
+    gzd, square = parts
+    mgrs_square = f"{gzd} {square}"
+
+    print(f"\nAttempting to extract data for {gzd}/{square}...")
+    print(f"  Available country PBFs: {', '.join(r for r, _ in available_pbfs)}")
+
+    for region, pbf_path in available_pbfs:
+        print(f"\n  Trying {region}...")
+
+        # Call the download script with this region
+        # It will skip the download (PBF already exists) and just extract
+        cmd = [
+            "python3", "download_mgrs_data_osmium.py",
+            "--region", region,
+            mgrs_square
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout for extraction
+            )
+
+            # Check if extraction succeeded by looking for the data directory
+            if config.data_path.exists() and (config.data_path / "elevation.tif").exists():
+                print(f"\n  Successfully extracted data using {region} PBF")
+                return True
+            else:
+                # Extraction ran but didn't produce data (wrong region)
+                if "Error extracting region" in result.stderr or "0 features" in result.stdout:
+                    print(f"    No data in {region} for this region")
+                    continue
+
+        except subprocess.TimeoutExpired:
+            print(f"    Extraction timed out for {region}")
+            continue
+        except Exception as e:
+            print(f"    Error: {e}")
+            continue
+
+    return False
+
+
 def main():
     """Generate tactical map."""
 
@@ -3429,31 +3511,29 @@ def main():
         print(f"Rotation: {config.rotation_deg}° clockwise")
 
     # Check if data directory exists and has required files
-    if not config.data_path.exists():
-        print(f"\n{'='*60}")
-        print("ERROR: Data directory not found!")
-        print(f"{'='*60}")
-        print(f"Expected: {config.data_path}")
-        print(f"\nTo download the required data, ask Claude:")
-        print(f'  "Download OSM data for region {config.region}"')
-        print(f"\nOr run manually:")
-        print(f"  python3 download_mgrs_data_osmium.py")
-        print(f"{'='*60}")
-        return
-
-    # Check for essential data file (elevation.tif)
     dem_path = config.data_path / "elevation.tif"
-    if not dem_path.exists():
-        print(f"\n{'='*60}")
-        print("ERROR: Elevation data not found!")
-        print(f"{'='*60}")
-        print(f"Expected: {dem_path}")
-        print(f"\nTo download the required data, ask Claude:")
-        print(f'  "Download OSM data for region {config.region}"')
-        print(f"\nOr run manually:")
-        print(f"  python3 download_mgrs_data_osmium.py")
-        print(f"{'='*60}")
-        return
+    data_missing = not config.data_path.exists() or not dem_path.exists()
+
+    if data_missing:
+        print(f"\nData not found for {config.region}")
+
+        # Try to auto-extract from available country PBFs
+        if auto_extract_mgrs_data(config):
+            print("Data extraction complete!")
+        else:
+            # No country PBF available - show error
+            print(f"\n{'='*60}")
+            print("ERROR: Could not extract map data!")
+            print(f"{'='*60}")
+            print(f"Expected: {config.data_path}")
+            print(f"\nNo country PBF found that contains this region.")
+            print(f"Download the appropriate country from Geofabrik first:")
+            print(f"  curl -L -o data/geofabrik/COUNTRY-latest.osm.pbf \\")
+            print(f"    https://download.geofabrik.de/asia/COUNTRY-latest.osm.pbf")
+            print(f"\nAvailable regions: japan, taiwan, philippines, south-korea,")
+            print(f"  indonesia, malaysia-singapore-brunei, vietnam, thailand")
+            print(f"{'='*60}")
+            return
 
     # Create output directory
     config.output_path.mkdir(parents=True, exist_ok=True)
