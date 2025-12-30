@@ -560,6 +560,68 @@ def download_reference_tiles(
     print(f"    Saved {width}x{height} reference image")
 
 
+def get_map_config_bounds(config_path: Path) -> Optional[Tuple[float, float, float, float]]:
+    """Calculate bounds from map_config.json if it exists.
+
+    Returns bounds that cover the full hex grid with buffer, or None if config doesn't exist.
+    """
+    if not config_path.exists():
+        return None
+
+    try:
+        import math
+        from pyproj import Transformer
+
+        with open(config_path) as f:
+            config = json.load(f)
+
+        center_lon = config.get('center_lon')
+        center_lat = config.get('center_lat')
+
+        if center_lon is None or center_lat is None:
+            return None
+
+        # Map parameters (must match tactical_map.py)
+        HEX_SIZE_M = 250
+        GRID_WIDTH = 47
+        GRID_HEIGHT = 26
+
+        # Transform to UTM to calculate proper bounds
+        # Determine UTM zone from longitude
+        utm_zone = int((center_lon + 180) / 6) + 1
+        utm_crs = f"EPSG:326{utm_zone:02d}" if center_lat >= 0 else f"EPSG:327{utm_zone:02d}"
+
+        transformer = Transformer.from_crs("EPSG:4326", utm_crs, always_xy=True)
+        transformer_back = Transformer.from_crs(utm_crs, "EPSG:4326", always_xy=True)
+
+        center_x, center_y = transformer.transform(center_lon, center_lat)
+
+        # Hex geometry
+        size = HEX_SIZE_M / math.sqrt(3)
+        col_spacing = 1.5 * size
+        row_spacing = HEX_SIZE_M
+
+        width_m = (GRID_WIDTH - 1) * col_spacing + 2 * size
+        height_m = GRID_HEIGHT * row_spacing + row_spacing / 2
+
+        # Add 500m buffer
+        buffer = 500
+        min_x = center_x - width_m / 2 - buffer
+        max_x = center_x + width_m / 2 + buffer
+        min_y = center_y - height_m / 2 - buffer
+        max_y = center_y + height_m / 2 + buffer
+
+        # Convert back to WGS84
+        min_lon, min_lat = transformer_back.transform(min_x, min_y)
+        max_lon, max_lat = transformer_back.transform(max_x, max_y)
+
+        return (min_lon, min_lat, max_lon, max_lat)
+
+    except Exception as e:
+        print(f"  Warning: Could not calculate map config bounds: {e}")
+        return None
+
+
 def download_mgrs_square_osmium(
     mgrs_square: str,
     region: str,
@@ -580,9 +642,25 @@ def download_mgrs_square_osmium(
     print(f"Using Geofabrik region: {region}")
     print(f"{'='*60}")
 
-    # Get bounds
+    # Get bounds - prefer map config bounds if available
     print("\nCalculating bounds...")
-    bounds = get_mgrs_square_bounds(gzd, square)
+    config_path = Path(__file__).parent / "map_config.json"
+    map_bounds = get_map_config_bounds(config_path)
+    mgrs_bounds = get_mgrs_square_bounds(gzd, square)
+
+    if map_bounds:
+        # Use the union of map bounds and MGRS bounds to ensure full coverage
+        bounds = (
+            min(map_bounds[0], mgrs_bounds[0]),
+            min(map_bounds[1], mgrs_bounds[1]),
+            max(map_bounds[2], mgrs_bounds[2]),
+            max(map_bounds[3], mgrs_bounds[3])
+        )
+        print(f"  Using expanded bounds from map_config.json")
+    else:
+        bounds = mgrs_bounds
+        print(f"  Using MGRS square bounds")
+
     min_lon, min_lat, max_lon, max_lat = bounds
     print(f"  SW: {min_lat:.4f}N, {min_lon:.4f}E")
     print(f"  NE: {max_lat:.4f}N, {max_lon:.4f}E")

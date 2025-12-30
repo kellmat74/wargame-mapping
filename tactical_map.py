@@ -1408,6 +1408,9 @@ def render_tactical_svg(
     layer_background = dwg.g(id="Background")
     layer_terrain_open = dwg.g(id="Terrain_Open")
 
+    # Ocean layer (rendered BEFORE terrain so terrain covers island)
+    layer_ocean = dwg.g(id="Ocean")
+
     # Terrain polygons
     layer_terrain_water = dwg.g(id="Terrain_Water")
     layer_terrain_marsh = dwg.g(id="Terrain_Marsh")
@@ -1488,24 +1491,89 @@ def render_tactical_svg(
     # Background fills entire document including bleed area
     layer_background.add(dwg.rect((0, 0), (viewbox_width_with_bleed, viewbox_height_with_bleed), fill="#404040"))
 
-    # Layer 1: Playable area base fill (cream/off-white for open terrain)
-    if playable_area.geom_type == "Polygon":
-        coords = list(playable_area.exterior.coords)
-        svg_points = [to_svg(x, y) for x, y in coords]
-        layer_terrain_open.add(dwg.polygon(
-            points=svg_points,
-            fill=TERRAIN_COLORS["open"],
-            stroke="none",
-        ))
-    elif playable_area.geom_type == "MultiPolygon":
-        for poly in playable_area.geoms:
-            coords = list(poly.exterior.coords)
+    # === Early coastline/island detection ===
+    # Detect islands BEFORE rendering terrain so we can use them as base fill
+    detected_island_polygons = []
+    coastline_gdf = enhanced_features.get('coastline') if enhanced_features else None
+    if coastline_gdf is not None and not coastline_gdf.empty:
+        print("  Detecting islands from coastline...")
+        from shapely.ops import linemerge
+        from shapely.geometry import Polygon as ShapelyPolygon
+
+        # Collect all coastline geometries
+        coast_lines = []
+        for _, row in coastline_gdf.iterrows():
+            geom = row.geometry
+            if geom is None:
+                continue
+            if geom.geom_type == 'LineString':
+                coast_lines.append(geom)
+            elif geom.geom_type == 'MultiLineString':
+                coast_lines.extend(list(geom.geoms))
+            elif geom.geom_type == 'Polygon':
+                detected_island_polygons.append(geom)
+            elif geom.geom_type == 'MultiPolygon':
+                detected_island_polygons.extend(list(geom.geoms))
+
+        # Merge coastline segments and check if they form closed rings (islands)
+        if coast_lines:
+            merged_coast = linemerge(coast_lines)
+            merged_lines = []
+            if merged_coast.geom_type == 'LineString':
+                merged_lines = [merged_coast]
+            elif merged_coast.geom_type == 'MultiLineString':
+                merged_lines = list(merged_coast.geoms)
+
+            for line in merged_lines:
+                if line.is_ring:
+                    detected_island_polygons.append(ShapelyPolygon(line.coords))
+
+        if detected_island_polygons:
+            print(f"    Found {len(detected_island_polygons)} island polygon(s)")
+
+    # Layer 1: Base terrain fill
+    # If we have islands, render them as base fill (ocean is below)
+    # Otherwise, render full playable area as base fill
+    if detected_island_polygons:
+        print("  Rendering island polygons as base terrain...")
+        # Clip islands to playable area and render
+        for island in detected_island_polygons:
+            clipped = island.intersection(playable_area)
+            if clipped.is_empty:
+                continue
+            polys_to_render = []
+            if clipped.geom_type == 'Polygon':
+                polys_to_render = [clipped]
+            elif clipped.geom_type == 'MultiPolygon':
+                polys_to_render = list(clipped.geoms)
+
+            for poly in polys_to_render:
+                coords = list(poly.exterior.coords)
+                svg_points = [to_svg(x, y) for x, y in coords]
+                layer_terrain_open.add(dwg.polygon(
+                    points=svg_points,
+                    fill=TERRAIN_COLORS["open"],
+                    stroke="none",
+                ))
+    else:
+        # No islands - use full playable area (mainland map)
+        if playable_area.geom_type == "Polygon":
+            coords = list(playable_area.exterior.coords)
             svg_points = [to_svg(x, y) for x, y in coords]
             layer_terrain_open.add(dwg.polygon(
                 points=svg_points,
                 fill=TERRAIN_COLORS["open"],
                 stroke="none",
             ))
+        elif playable_area.geom_type == "MultiPolygon":
+            for poly in playable_area.geoms:
+                coords = list(poly.exterior.coords)
+                svg_points = [to_svg(x, y) for x, y in coords]
+                layer_terrain_open.add(dwg.polygon(
+                    points=svg_points,
+                    fill=TERRAIN_COLORS["open"],
+                    stroke="none",
+                ))
 
     # Layer 2: Continuous terrain polygons (unclipped - frame will mask edges)
     if not landcover.empty:
@@ -1548,14 +1616,35 @@ def render_tactical_svg(
                     stroke_width=stroke_width,
                 ))
 
-    # Render ocean polygon from coastline (elegant approach)
-    # Creates a polygon that follows the actual shoreline and extends to map edges
-    coastline_gdf = enhanced_features.get('coastline') if enhanced_features else None
-    if coastline_gdf is not None and not coastline_gdf.empty and dem is not None:
-        print("  Creating ocean polygon from coastline...")
+    # Render ocean polygon
+    # For island maps: ocean is a simple rectangle below the terrain (terrain covers islands)
+    # For mainland maps: use complex polygonize approach with coastlines
+    if detected_island_polygons:
+        # Island map - render simple ocean rectangle (terrain_open will cover land)
+        print("  Rendering ocean for island map...")
+        buffer = 2000  # 2km buffer beyond data bounds
+        ocean_bounds = box(
+            config.data_min_x - buffer,
+            config.data_min_y - buffer,
+            config.data_max_x + buffer,
+            config.data_max_y + buffer
+        )
+        water_fill = TERRAIN_COLORS["water"]
+        ext_coords = list(ocean_bounds.exterior.coords)
+        ext_svg = [to_svg(x, y) for x, y in ext_coords]
+        layer_ocean.add(dwg.polygon(
+            points=ext_svg,
+            fill=water_fill,
+            stroke="none",
+        ))
+        print(f"    Ocean rendered as simple rectangle (islands detected earlier)")
+
+    elif coastline_gdf is not None and not coastline_gdf.empty and dem is not None:
+        # Mainland map - use complex polygonize approach
+        print("  Creating ocean polygon from coastline (mainland approach)...")
         try:
             from shapely.ops import polygonize, linemerge, unary_union, snap
-            from shapely.geometry import MultiLineString, GeometryCollection, Point
+            from shapely.geometry import MultiLineString, GeometryCollection
 
             # Create a large bounding box that extends beyond the map
             buffer = 2000  # 2km buffer beyond data bounds
@@ -1567,9 +1656,8 @@ def render_tactical_svg(
             )
             bound_ring = ocean_bounds.exterior
 
-            # Collect all coastline geometries
+            # Collect coastline geometries (only lines for mainland)
             coast_lines = []
-            island_polygons = []  # Closed coastline polygons (islands)
             for _, row in coastline_gdf.iterrows():
                 geom = row.geometry
                 if geom is None:
@@ -1578,11 +1666,6 @@ def render_tactical_svg(
                     coast_lines.append(geom)
                 elif geom.geom_type == 'MultiLineString':
                     coast_lines.extend(list(geom.geoms))
-                elif geom.geom_type == 'Polygon':
-                    # Closed coastline = island polygon
-                    island_polygons.append(geom)
-                elif geom.geom_type == 'MultiPolygon':
-                    island_polygons.extend(list(geom.geoms))
 
             if coast_lines:
                 # Merge connected coastline segments
@@ -1719,63 +1802,13 @@ def render_tactical_svg(
                         for ocean_poly in ocean_polys:
                             coords = list(ocean_poly.exterior.coords)
                             svg_points = [to_svg(x, y) for x, y in coords]
-                            layer_terrain_water.add(dwg.polygon(
+                            layer_ocean.add(dwg.polygon(
                                 points=svg_points,
                                 fill=water_fill,
                                 stroke="none",
                             ))
                     else:
                         print("    No ocean polygons identified (none at sea level)")
-
-            elif island_polygons:
-                # Handle closed coastline polygons (islands)
-                # Ocean = bounding box - island polygons
-                print(f"    Processing {len(island_polygons)} island polygon(s)...")
-
-                # Clip island polygons to our bounds
-                clipped_islands = []
-                for island in island_polygons:
-                    clipped = island.intersection(ocean_bounds)
-                    if not clipped.is_empty and clipped.is_valid:
-                        if clipped.geom_type == 'Polygon':
-                            clipped_islands.append(clipped)
-                        elif clipped.geom_type == 'MultiPolygon':
-                            clipped_islands.extend(list(clipped.geoms))
-
-                if clipped_islands:
-                    # Create ocean polygon by subtracting islands from bounds
-                    ocean_poly = ocean_bounds
-                    for island in clipped_islands:
-                        try:
-                            ocean_poly = ocean_poly.difference(island)
-                        except Exception:
-                            pass  # Skip invalid geometries
-
-                    if not ocean_poly.is_empty:
-                        print(f"    Created ocean polygon (bounds minus {len(clipped_islands)} island(s))")
-                        water_fill = TERRAIN_COLORS["water"]
-
-                        # Handle both Polygon and MultiPolygon results
-                        ocean_geoms = []
-                        if ocean_poly.geom_type == 'Polygon':
-                            ocean_geoms.append(ocean_poly)
-                        elif ocean_poly.geom_type == 'MultiPolygon':
-                            ocean_geoms.extend(list(ocean_poly.geoms))
-
-                        print(f"    Rendering {len(ocean_geoms)} ocean polygon(s)")
-                        for poly in ocean_geoms:
-                            if poly.is_valid and not poly.is_empty:
-                                coords = list(poly.exterior.coords)
-                                svg_points = [to_svg(x, y) for x, y in coords]
-                                layer_terrain_water.add(dwg.polygon(
-                                    points=svg_points,
-                                    fill=water_fill,
-                                    stroke="none",
-                                ))
-                    else:
-                        print("    No ocean area after subtracting islands")
-                else:
-                    print("    No island polygons within bounds")
 
         except Exception as e:
             import traceback
@@ -3212,6 +3245,8 @@ def render_tactical_svg(
         rotated_content.add(layer_mgrs_grid)         # MGRS grid (real-world coords)
         # Reference tiles at very bottom (hidden, for artist reference)
         master_group.add(rotated_reference)
+        # Ocean layer below terrain (terrain covers islands)
+        master_group.add(layer_ocean)
         # Base open terrain matches hex grid (unrotated)
         master_group.add(layer_terrain_open)
         master_group.add(rotated_content)
@@ -3226,8 +3261,9 @@ def render_tactical_svg(
     else:
         # Non-rotated layer order
         master_group.add(layer_reference_tiles)   # Reference tiles (hidden)
+        master_group.add(layer_ocean)             # Ocean (below terrain, terrain covers islands)
         master_group.add(layer_terrain_open)      # Open terrain fill
-        master_group.add(layer_terrain_water)     # Water polygons
+        master_group.add(layer_terrain_water)     # Water polygons (ponds, etc.)
         master_group.add(layer_terrain_marsh)     # Marsh polygons
         master_group.add(layer_terrain_forest)    # Forest polygons
         master_group.add(layer_terrain_orchard)   # Orchard polygons

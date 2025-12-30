@@ -1,7 +1,7 @@
 {
-  "name": "tactical_map",
-  "center_lat": 9.97038260862691,
-  "center_lon": 118.78203043614823,
-  "region": "50P/PS",
-  "rotation_deg": 60
+  "name": "Yonaguni",
+  "center_lat": 24.457530685063105,
+  "center_lon": 122.98673022681284,
+  "region": "51R/VH",
+  "rotation_deg": 0
 }
