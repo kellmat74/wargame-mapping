@@ -3427,21 +3427,34 @@ def get_available_country_pbfs() -> List[Tuple[str, Path]]:
     return pbfs
 
 
-def auto_extract_mgrs_data(config: 'MapConfig') -> bool:
+# Map Geofabrik region names to display country names
+GEOFABRIK_TO_COUNTRY = {
+    "japan": "Japan",
+    "taiwan": "Taiwan",
+    "philippines": "Philippines",
+    "south-korea": "South Korea",
+    "indonesia": "Indonesia",
+    "vietnam": "Vietnam",
+    "thailand": "Thailand",
+    "malaysia-singapore-brunei": "Malaysia",
+}
+
+
+def auto_extract_mgrs_data(config: 'MapConfig') -> str:
     """Try to extract MGRS data from available country PBFs.
 
-    Returns True if extraction succeeded, False otherwise.
+    Returns country name if extraction succeeded, empty string otherwise.
     """
     available_pbfs = get_available_country_pbfs()
 
     if not available_pbfs:
-        return False
+        return ""
 
     # Parse region to get GZD and square
     parts = config.region.split("/")
     if len(parts) != 2:
         print(f"  Invalid region format: {config.region}")
-        return False
+        return ""
 
     gzd, square = parts
     mgrs_square = f"{gzd} {square}"
@@ -3470,8 +3483,9 @@ def auto_extract_mgrs_data(config: 'MapConfig') -> bool:
 
             # Check if extraction succeeded by looking for the data directory
             if config.data_path.exists() and (config.data_path / "elevation.tif").exists():
+                country = GEOFABRIK_TO_COUNTRY.get(region, region.title())
                 print(f"\n  Successfully extracted data using {region} PBF")
-                return True
+                return country
             else:
                 # Extraction ran but didn't produce data (wrong region)
                 if "Error extracting region" in result.stderr or "0 features" in result.stdout:
@@ -3485,7 +3499,7 @@ def auto_extract_mgrs_data(config: 'MapConfig') -> bool:
             print(f"    Error: {e}")
             continue
 
-    return False
+    return ""
 
 
 def main():
@@ -3518,12 +3532,25 @@ def main():
     dem_path = config.data_path / "elevation.tif"
     data_missing = not config.data_path.exists() or not dem_path.exists()
 
+    # If data exists but country not set, infer from bounds.json
+    if not data_missing and not config.country:
+        bounds_file = config.data_path / "bounds.json"
+        if bounds_file.exists():
+            with open(bounds_file) as f:
+                bounds_data = json.load(f)
+                geofabrik_region = bounds_data.get("source", {}).get("region", "")
+                if geofabrik_region:
+                    config.country = GEOFABRIK_TO_COUNTRY.get(geofabrik_region, geofabrik_region.title())
+                    print(f"Inferred country from data: {config.country}")
+
     if data_missing:
         print(f"\nData not found for {config.region}")
 
         # Try to auto-extract from available country PBFs
-        if auto_extract_mgrs_data(config):
-            print("Data extraction complete!")
+        extracted_country = auto_extract_mgrs_data(config)
+        if extracted_country:
+            config.country = extracted_country
+            print(f"Data extraction complete! Country: {config.country}")
         else:
             # No country PBF available - show error
             print(f"\n{'='*60}")

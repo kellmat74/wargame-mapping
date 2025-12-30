@@ -474,28 +474,14 @@
             </div>
         </div>
 
-        <!-- Step 1: Map Name & Country -->
+        <!-- Step 1: Map Name -->
         <div class="panel">
-            <h2>Step 1: Map Name & Country</h2>
+            <h2>Step 1: Map Name</h2>
             <div class="input-group">
-                <div class="input-field" style="flex: 2;">
+                <div class="input-field">
                     <label>Map Name</label>
                     <input type="text" id="mapName" value="tactical_map">
                     <div class="region-info">Used for output filenames (no spaces recommended)</div>
-                </div>
-                <div class="input-field">
-                    <label>Country</label>
-                    <select id="country" style="width: 100%; padding: 10px; background: #1a1a2e; border: 1px solid #0f3460; color: #fff; border-radius: 4px;">
-                        <option value="Japan">Japan</option>
-                        <option value="Taiwan">Taiwan</option>
-                        <option value="Philippines">Philippines</option>
-                        <option value="South Korea">South Korea</option>
-                        <option value="Indonesia">Indonesia</option>
-                        <option value="Vietnam">Vietnam</option>
-                        <option value="Thailand">Thailand</option>
-                        <option value="Malaysia">Malaysia</option>
-                    </select>
-                    <div class="region-info">Organizes output folder</div>
                 </div>
             </div>
         </div>
@@ -1036,7 +1022,6 @@
             centerLon: 120.6736,
             rotation: 0,
             region: '', // Auto-detect by default
-            country: 'Japan', // Default country
             mapName: 'tactical_map',
             shiftNorth: 0,
             shiftEast: 0,
@@ -1208,7 +1193,6 @@
 
             const config = {
                 name: state.mapName,
-                country: state.country,
                 center_lat: state.centerLat,
                 center_lon: state.centerLon,
                 region: effectiveRegion,
@@ -1358,7 +1342,6 @@ config = MapConfig(
 
             const config = {
                 name: state.mapName,
-                country: state.country,
                 center_lat: state.centerLat,
                 center_lon: state.centerLon,
                 region: effectiveRegion,
@@ -1548,12 +1531,6 @@ config = MapConfig(
             // Map name
             document.getElementById('mapName').addEventListener('input', (e) => {
                 state.mapName = e.target.value || 'untitled';
-                updateDisplay();
-            });
-
-            // Country
-            document.getElementById('country').addEventListener('change', (e) => {
-                state.country = e.target.value;
                 updateDisplay();
             });
 
