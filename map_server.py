@@ -25,6 +25,33 @@ from flask import Flask, send_file, request, jsonify, Response
 
 app = Flask(__name__)
 
+# Geofabrik region bounding boxes (min_lon, min_lat, max_lon, max_lat)
+# Used to auto-detect which regional PBF to use based on coordinates
+GEOFABRIK_REGIONS = {
+    "philippines": (116.0, 4.5, 127.0, 21.5),
+    "taiwan": (119.0, 21.5, 122.5, 26.0),
+    "japan": (122.5, 24.0, 154.0, 46.0),
+    "south-korea": (124.0, 33.0, 132.0, 39.0),
+    "indonesia": (95.0, -11.0, 141.0, 6.0),
+    "malaysia-singapore-brunei": (99.0, 0.5, 119.5, 7.5),
+    "vietnam": (102.0, 8.0, 110.0, 24.0),
+    "thailand": (97.0, 5.5, 106.0, 21.0),
+    "cambodia": (102.0, 9.5, 108.0, 15.0),
+    "laos": (100.0, 13.5, 108.0, 23.0),
+    "myanmar": (92.0, 9.5, 101.5, 28.5),
+}
+
+
+def detect_geofabrik_region(lat: float, lon: float) -> str:
+    """Detect which Geofabrik region contains the given coordinates.
+
+    Returns the region name or None if not found.
+    """
+    for region, (min_lon, min_lat, max_lon, max_lat) in GEOFABRIK_REGIONS.items():
+        if min_lon <= lon <= max_lon and min_lat <= lat <= max_lat:
+            return region
+    return None
+
 # Store for generation status
 generation_status = {
     'running': False,
@@ -177,13 +204,39 @@ def run_generation(region):
         if not data_exists:
             output_queue.put(f"Data not found for region '{region}' - downloading...")
 
-            # Run download script
-            download_script = base_path / 'download_mgrs_data.py'
+            # Read config to get coordinates for auto-detecting Geofabrik region
+            config_path = base_path / 'map_config.json'
+            geofabrik_region = None
+            if config_path.exists():
+                with open(config_path) as f:
+                    config = json.load(f)
+                    lat = config.get('center_lat')
+                    lon = config.get('center_lon')
+                    if lat and lon:
+                        geofabrik_region = detect_geofabrik_region(lat, lon)
+                        if geofabrik_region:
+                            output_queue.put(f"Auto-detected Geofabrik region: {geofabrik_region}")
+
+            if not geofabrik_region:
+                output_queue.put("WARNING: Could not auto-detect Geofabrik region from coordinates")
+                output_queue.put("Falling back to Overpass API download (may be incomplete)")
+                # Fall back to old script
+                download_script = base_path / 'download_mgrs_data.py'
+            else:
+                # Use new Osmium-based script
+                download_script = base_path / 'download_mgrs_data_osmium.py'
+
             # Convert region format: "51P/TT" -> "51P TT"
             region_arg = region.replace('/', ' ')
 
+            # Build command based on which script we're using
+            if geofabrik_region:
+                cmd = [sys.executable, str(download_script), '--region', geofabrik_region, region_arg]
+            else:
+                cmd = [sys.executable, str(download_script), region_arg]
+
             returncode = run_subprocess(
-                [sys.executable, str(download_script), region_arg],
+                cmd,
                 f"Downloading data for {region_arg}..."
             )
 
@@ -268,9 +321,16 @@ def check_data():
     try:
         config = request.get_json()
         region = config.get('region', '')
+        lat = config.get('center_lat')
+        lon = config.get('center_lon')
 
         if not region:
             return jsonify({'exists': False, 'message': 'No region specified'})
+
+        # Auto-detect Geofabrik region from coordinates
+        geofabrik_region = None
+        if lat and lon:
+            geofabrik_region = detect_geofabrik_region(lat, lon)
 
         # Parse region (e.g., "51P/TT" or "51P TT")
         region_clean = region.replace(' ', '/').replace('//', '/')
@@ -291,14 +351,23 @@ def check_data():
             return jsonify({
                 'exists': True,
                 'message': f'Data found for {region}',
-                'path': str(data_path)
+                'path': str(data_path),
+                'geofabrik_region': geofabrik_region
             })
         else:
+            # Build download command based on detected region
+            region_arg = region.replace('/', ' ')
+            if geofabrik_region:
+                download_cmd = f'python download_mgrs_data_osmium.py --region {geofabrik_region} "{region_arg}"'
+            else:
+                download_cmd = f'python download_mgrs_data.py "{region_arg}"'
+
             return jsonify({
                 'exists': False,
                 'message': f'Missing data for {region}: {", ".join(missing)}',
                 'missing': missing,
-                'download_command': f'python download_mgrs_data.py "{region}"'
+                'geofabrik_region': geofabrik_region,
+                'download_command': download_cmd
             })
 
     except Exception as e:

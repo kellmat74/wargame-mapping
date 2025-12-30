@@ -1569,6 +1569,7 @@ def render_tactical_svg(
 
             # Collect all coastline geometries
             coast_lines = []
+            island_polygons = []  # Closed coastline polygons (islands)
             for _, row in coastline_gdf.iterrows():
                 geom = row.geometry
                 if geom is None:
@@ -1577,6 +1578,11 @@ def render_tactical_svg(
                     coast_lines.append(geom)
                 elif geom.geom_type == 'MultiLineString':
                     coast_lines.extend(list(geom.geoms))
+                elif geom.geom_type == 'Polygon':
+                    # Closed coastline = island polygon
+                    island_polygons.append(geom)
+                elif geom.geom_type == 'MultiPolygon':
+                    island_polygons.extend(list(geom.geoms))
 
             if coast_lines:
                 # Merge connected coastline segments
@@ -1720,6 +1726,57 @@ def render_tactical_svg(
                             ))
                     else:
                         print("    No ocean polygons identified (none at sea level)")
+
+            elif island_polygons:
+                # Handle closed coastline polygons (islands)
+                # Ocean = bounding box - island polygons
+                print(f"    Processing {len(island_polygons)} island polygon(s)...")
+
+                # Clip island polygons to our bounds
+                clipped_islands = []
+                for island in island_polygons:
+                    clipped = island.intersection(ocean_bounds)
+                    if not clipped.is_empty and clipped.is_valid:
+                        if clipped.geom_type == 'Polygon':
+                            clipped_islands.append(clipped)
+                        elif clipped.geom_type == 'MultiPolygon':
+                            clipped_islands.extend(list(clipped.geoms))
+
+                if clipped_islands:
+                    # Create ocean polygon by subtracting islands from bounds
+                    ocean_poly = ocean_bounds
+                    for island in clipped_islands:
+                        try:
+                            ocean_poly = ocean_poly.difference(island)
+                        except Exception:
+                            pass  # Skip invalid geometries
+
+                    if not ocean_poly.is_empty:
+                        print(f"    Created ocean polygon (bounds minus {len(clipped_islands)} island(s))")
+                        water_fill = TERRAIN_COLORS["water"]
+
+                        # Handle both Polygon and MultiPolygon results
+                        ocean_geoms = []
+                        if ocean_poly.geom_type == 'Polygon':
+                            ocean_geoms.append(ocean_poly)
+                        elif ocean_poly.geom_type == 'MultiPolygon':
+                            ocean_geoms.extend(list(ocean_poly.geoms))
+
+                        print(f"    Rendering {len(ocean_geoms)} ocean polygon(s)")
+                        for poly in ocean_geoms:
+                            if poly.is_valid and not poly.is_empty:
+                                coords = list(poly.exterior.coords)
+                                svg_points = [to_svg(x, y) for x, y in coords]
+                                layer_terrain_water.add(dwg.polygon(
+                                    points=svg_points,
+                                    fill=water_fill,
+                                    stroke="none",
+                                ))
+                    else:
+                        print("    No ocean area after subtracting islands")
+                else:
+                    print("    No island polygons within bounds")
+
         except Exception as e:
             import traceback
             print(f"    Error creating ocean polygon: {e}")
