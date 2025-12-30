@@ -27,6 +27,9 @@ from shapely.ops import linemerge
 from pyproj import Transformer, CRS
 import svgwrite
 
+# Local utilities
+from map_utils import Bounds, RotationConfig, CoordinateTransformer, LayerManager, LayerZOrder
+
 # === Configuration ===
 DATA_DIR = Path("data")
 OUTPUT_DIR = Path("output")
@@ -429,6 +432,47 @@ class MapConfig:
         if self.country:
             return OUTPUT_DIR / self.country / self.name
         return OUTPUT_DIR / self.name
+
+    @property
+    def map_bounds(self) -> Bounds:
+        """Get map bounds as a Bounds object."""
+        return Bounds(
+            min_x=self.min_x,
+            max_x=self.max_x,
+            min_y=self.min_y,
+            max_y=self.max_y
+        )
+
+    @property
+    def data_bounds(self) -> Bounds:
+        """Get expanded data bounds as a Bounds object."""
+        return Bounds(
+            min_x=self.data_min_x,
+            max_x=self.data_max_x,
+            min_y=self.data_min_y,
+            max_y=self.data_max_y
+        )
+
+    def get_rotation_config(self, center_x: float, center_y: float) -> RotationConfig:
+        """Get a RotationConfig for the given SVG rotation center."""
+        return RotationConfig(
+            angle_deg=self.rotation_deg,
+            center_x=center_x,
+            center_y=center_y
+        )
+
+    def create_coordinate_transformer(
+        self,
+        svg_offset_x: float = 0,
+        svg_offset_y: float = 0
+    ) -> CoordinateTransformer:
+        """Create a CoordinateTransformer for this map configuration."""
+        return CoordinateTransformer(
+            grid_crs=GRID_CRS,
+            map_bounds=self.map_bounds,
+            svg_offset_x=svg_offset_x,
+            svg_offset_y=svg_offset_y
+        )
 
 
 class TacticalHexGrid:
