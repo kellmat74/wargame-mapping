@@ -976,25 +976,41 @@ def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15) -> dic
     output_image = config.output_path / f"{config.name}_reference_highres.png"
     output_info = config.output_path / f"{config.name}_reference_highres.json"
 
-    # Check if already downloaded
+    # Transform map bounds from UTM to WGS84 to check coverage
+    transformer = Transformer.from_crs(GRID_CRS, WGS84, always_xy=True)
+    needed_min_lon, needed_min_lat = transformer.transform(config.data_min_x, config.data_min_y)
+    needed_max_lon, needed_max_lat = transformer.transform(config.data_max_x, config.data_max_y)
+
+    # Check if already downloaded AND covers the needed area
     if output_image.exists() and output_info.exists():
-        print(f"  Loading existing high-res reference tiles...")
         with open(output_info) as f:
             tile_info = json.load(f)
-        with open(output_image, 'rb') as f:
-            image_data = base64.b64encode(f.read()).decode('utf-8')
-        tile_info['image_data'] = image_data
-        print(f"    Loaded {tile_info['width']}x{tile_info['height']} high-res tile image (zoom {tile_info['zoom']})")
-        return tile_info
+
+        # Check if stored bounds cover the needed area (with small tolerance)
+        tolerance = 0.001  # ~100m
+        stored = tile_info.get('bounds', {})
+        bounds_ok = (
+            stored.get('north', 0) >= needed_max_lat - tolerance and
+            stored.get('south', 0) <= needed_min_lat + tolerance and
+            stored.get('east', 0) >= needed_max_lon - tolerance and
+            stored.get('west', 0) <= needed_min_lon + tolerance
+        )
+
+        if bounds_ok:
+            print(f"  Loading existing high-res reference tiles...")
+            with open(output_image, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode('utf-8')
+            tile_info['image_data'] = image_data
+            print(f"    Loaded {tile_info['width']}x{tile_info['height']} high-res tile image (zoom {tile_info['zoom']})")
+            return tile_info
+        else:
+            print(f"  Stored reference tiles don't cover current bounds, re-downloading...")
 
     print(f"  Downloading high-res reference tiles (zoom {zoom})...")
 
-    # Transform map bounds from UTM to WGS84
-    transformer = Transformer.from_crs(GRID_CRS, WGS84, always_xy=True)
-
-    # Use data bounds (which account for rotation buffer)
-    min_lon, min_lat = transformer.transform(config.data_min_x, config.data_min_y)
-    max_lon, max_lat = transformer.transform(config.data_max_x, config.data_max_y)
+    # Use the already computed bounds
+    min_lon, min_lat = needed_min_lon, needed_min_lat
+    max_lon, max_lat = needed_max_lon, needed_max_lat
 
     def lat_lon_to_tile(lat, lon, z):
         n = 2 ** z
@@ -1676,6 +1692,17 @@ def render_tactical_svg(
                                   f"samples={len(sample_elevations)}, ocean_samples={ocean_samples}, "
                                   f"avg_elev={avg_elev:.1f}m, is_ocean={is_ocean}")
 
+                            if is_ocean:
+                                ocean_polys.append(poly)
+                        else:
+                            # No elevation samples - polygon is outside DEM coverage
+                            # If it touches the boundary and is large, assume it's ocean
+                            touches_boundary = poly.intersects(bound_ring)
+                            area_km2 = poly.area / 1e6
+                            # Assume large polygons outside DEM that touch boundary are ocean
+                            is_ocean = touches_boundary and area_km2 > 1.0
+                            print(f"      Polygon {i}: area={area_km2:.2f}km², "
+                                  f"NO DEM SAMPLES, touches_boundary={touches_boundary}, is_ocean={is_ocean}")
                             if is_ocean:
                                 ocean_polys.append(poly)
 
