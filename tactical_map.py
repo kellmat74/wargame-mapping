@@ -258,7 +258,8 @@ class MapConfig:
     name: str
     center_lat: float
     center_lon: float
-    region: str  # e.g., "taiwan" or "51R/TG" or "51R TG" - determines which data folder to use
+    region: str  # e.g., "51R/TG" or "51R TG" - determines which data folder to use
+    country: str = ""  # e.g., "Japan", "Taiwan", "Philippines" - for output folder organization
     rotation_deg: float = 0  # Map rotation in degrees (positive = clockwise)
 
     # Computed values (set by calculate_bounds)
@@ -405,7 +406,9 @@ class MapConfig:
 
     @property
     def output_path(self) -> Path:
-        return OUTPUT_DIR / self.region / self.name
+        if self.country:
+            return OUTPUT_DIR / self.country / self.name
+        return OUTPUT_DIR / self.name
 
 
 class TacticalHexGrid:
@@ -3397,7 +3400,8 @@ def load_config_from_file() -> Optional[MapConfig]:
         name=data.get("name", "unnamed"),
         center_lat=data["center_lat"],
         center_lon=data["center_lon"],
-        region=data.get("region", "taiwan"),
+        region=data.get("region", ""),
+        country=data.get("country", ""),
         rotation_deg=data.get("rotation_deg", 0),
     )
 

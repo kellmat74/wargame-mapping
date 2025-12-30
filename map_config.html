@@ -467,21 +467,35 @@
 
                     <p style="margin: 0 0 10px 0;"><strong style="color: #00d4ff;">Step 3: Find Your Output</strong></p>
                     <ul style="margin: 0; padding-left: 20px;">
-                        <li>SVG map: <code style="background: #1a1a2e; padding: 2px 6px; border-radius: 3px;">output/{region}/{name}/{name}_tactical.svg</code></li>
-                        <li>Hex data: <code style="background: #1a1a2e; padding: 2px 6px; border-radius: 3px;">output/{region}/{name}/{name}_hexdata.json</code></li>
+                        <li>SVG map: <code style="background: #1a1a2e; padding: 2px 6px; border-radius: 3px;">output/{country}/{name}/{name}_tactical.svg</code></li>
+                        <li>Hex data: <code style="background: #1a1a2e; padding: 2px 6px; border-radius: 3px;">output/{country}/{name}/{name}_hexdata.json</code></li>
                     </ul>
                 </div>
             </div>
         </div>
 
-        <!-- Step 1: Map Name -->
+        <!-- Step 1: Map Name & Country -->
         <div class="panel">
-            <h2>Step 1: Map Name</h2>
+            <h2>Step 1: Map Name & Country</h2>
             <div class="input-group">
-                <div class="input-field">
+                <div class="input-field" style="flex: 2;">
                     <label>Map Name</label>
                     <input type="text" id="mapName" value="tactical_map">
                     <div class="region-info">Used for output filenames (no spaces recommended)</div>
+                </div>
+                <div class="input-field">
+                    <label>Country</label>
+                    <select id="country" style="width: 100%; padding: 10px; background: #1a1a2e; border: 1px solid #0f3460; color: #fff; border-radius: 4px;">
+                        <option value="Japan">Japan</option>
+                        <option value="Taiwan">Taiwan</option>
+                        <option value="Philippines">Philippines</option>
+                        <option value="South Korea">South Korea</option>
+                        <option value="Indonesia">Indonesia</option>
+                        <option value="Vietnam">Vietnam</option>
+                        <option value="Thailand">Thailand</option>
+                        <option value="Malaysia">Malaysia</option>
+                    </select>
+                    <div class="region-info">Organizes output folder</div>
                 </div>
             </div>
         </div>
@@ -1022,6 +1036,7 @@
             centerLon: 120.6736,
             rotation: 0,
             region: '', // Auto-detect by default
+            country: 'Japan', // Default country
             mapName: 'tactical_map',
             shiftNorth: 0,
             shiftEast: 0,
@@ -1193,6 +1208,7 @@
 
             const config = {
                 name: state.mapName,
+                country: state.country,
                 center_lat: state.centerLat,
                 center_lon: state.centerLon,
                 region: effectiveRegion,
@@ -1342,6 +1358,7 @@ config = MapConfig(
 
             const config = {
                 name: state.mapName,
+                country: state.country,
                 center_lat: state.centerLat,
                 center_lon: state.centerLon,
                 region: effectiveRegion,
@@ -1531,6 +1548,12 @@ config = MapConfig(
             // Map name
             document.getElementById('mapName').addEventListener('input', (e) => {
                 state.mapName = e.target.value || 'untitled';
+                updateDisplay();
+            });
+
+            // Country
+            document.getElementById('country').addEventListener('change', (e) => {
+                state.country = e.target.value;
                 updateDisplay();
             });
 
