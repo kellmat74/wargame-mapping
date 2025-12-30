@@ -2995,8 +2995,11 @@ def render_tactical_svg(
     ))
 
     if config.rotation_deg != 0:
+        bearing_at_top = -config.rotation_deg
+        if bearing_at_top < 0:
+            bearing_at_top += 360
         layer_map_data.add(dwg.text(
-            f"Rotation: {config.rotation_deg}° CW (North is {config.rotation_deg}° left of up)",
+            f"Bearing at Top: {bearing_at_top:.0f}°",
             insert=(mid_col_x, data_block_y + DATA_LINE_HEIGHT_M * 3),
             font_size=DATA_FONT_SIZE_M,
             fill="#ffcc00",  # Yellow to highlight rotation
@@ -3105,16 +3108,30 @@ def render_tactical_svg(
     ))
     layer_compass.add(n_label_group)
 
-    # Add rotation indicator text (stays horizontal)
-    if config.rotation_deg != 0:
-        layer_compass.add(dwg.text(
-            f"{config.rotation_deg}° CW",
-            insert=(compass_cx, compass_cy + circle_radius + DATA_FONT_SIZE_M + 5),
-            text_anchor="middle",
-            font_size=DATA_FONT_SIZE_M * 0.8,
-            fill="#888888",
-            font_family="sans-serif",
-        ))
+    # Add "Top of Map" heading indicator above compass (stays horizontal)
+    # bearing_at_top = -rotation_deg (if rotation is -50°, bearing at top is 50°)
+    bearing_at_top = -config.rotation_deg if config.rotation_deg != 0 else 0
+    if bearing_at_top < 0:
+        bearing_at_top += 360
+
+    # Small upward arrow and heading text above compass
+    arrow_y = compass_cy - circle_radius - DATA_FONT_SIZE_M * 2.5
+    layer_compass.add(dwg.text(
+        "↑",
+        insert=(compass_cx, arrow_y),
+        text_anchor="middle",
+        font_size=DATA_FONT_SIZE_M * 1.5,
+        fill="#888888",
+        font_family="sans-serif",
+    ))
+    layer_compass.add(dwg.text(
+        f"Top: {bearing_at_top:.0f}°",
+        insert=(compass_cx, arrow_y - DATA_FONT_SIZE_M * 1.2),
+        text_anchor="middle",
+        font_size=DATA_FONT_SIZE_M * 0.8,
+        fill="#888888",
+        font_family="sans-serif",
+    ))
 
     # === Add all layers to drawing in correct z-order ===
     # Layer order: reference -> terrain -> features -> frame -> grid/labels
