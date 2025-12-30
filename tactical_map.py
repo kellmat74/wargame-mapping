@@ -11,6 +11,7 @@ Generates US Army military-style maps with:
 import json
 import math
 import subprocess
+import time
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Tuple, List, Optional
@@ -41,7 +42,7 @@ CONTOUR_INTERVAL = 20      # meters between contour lines
 INDEX_CONTOUR_INTERVAL = 100  # meters between index (bold) contours
 
 # Coordinate systems
-GRID_CRS = "EPSG:3826"  # TWD97 / TM2 Taiwan (meters)
+GRID_CRS = "EPSG:32651"  # UTM zone 51N (meters) - for Philippines/Batanes region
 WGS84 = "EPSG:4326"
 
 # UTM zone - will be set dynamically based on map center location
@@ -86,6 +87,13 @@ CONTOUR_WIDTH_M = 2               # Regular contour width in meters
 INDEX_CONTOUR_WIDTH_M = 5         # Index contour width in meters
 CONTOUR_LABEL_INTERVAL_M = 1000   # Distance between elevation labels on index contours
 CONTOUR_LABEL_SIZE_M = 25         # Contour label font size (same as hex labels)
+
+# DEM alignment offset - can be adjusted if contours don't align with OSM features
+# These correct for systematic misalignment between SRTM DEM and OSM data
+# Positive NORTHING_OFFSET shifts contours south, negative shifts north
+# Positive EASTING_OFFSET shifts contours west, negative shifts east
+DEM_NORTHING_OFFSET_M = 0         # Set to 0 by default - adjust if needed
+DEM_EASTING_OFFSET_M = -150       # Batanes DEM is shifted west of OSM, shift east to correct
 
 ROAD_COLORS = {
     "highway": "#666666",         # Dark grey (OpenTopoMap style)
@@ -345,15 +353,22 @@ class MapConfig:
 
         # Calculate expanded bounds for data loading (accounts for rotation)
         if self.rotation_deg != 0:
-            # When rotated, we need data for a larger area to fill the visible window
-            # The diagonal of the map determines the maximum extent needed
-            diagonal = math.sqrt(width_m**2 + height_m**2)
-            # Use half diagonal as the radius from center, plus some buffer
-            expand_buffer = (diagonal / 2) - min(width_m, height_m) / 2 + 500
-            self.data_min_x = self.min_x - expand_buffer
-            self.data_max_x = self.max_x + expand_buffer
-            self.data_min_y = self.min_y - expand_buffer
-            self.data_max_y = self.max_y + expand_buffer
+            # When rotated, the bounding box of the rotated rectangle is larger
+            # For rectangle W x H rotated by θ:
+            #   rotated_width = |W * cos(θ)| + |H * sin(θ)|
+            #   rotated_height = |W * sin(θ)| + |H * cos(θ)|
+            angle_rad = math.radians(abs(self.rotation_deg))
+            cos_a = abs(math.cos(angle_rad))
+            sin_a = abs(math.sin(angle_rad))
+            rotated_width = width_m * cos_a + height_m * sin_a
+            rotated_height = width_m * sin_a + height_m * cos_a
+            # Expansion needed in each direction, plus safety buffer
+            expand_x = (rotated_width - width_m) / 2 + 500
+            expand_y = (rotated_height - height_m) / 2 + 500
+            self.data_min_x = self.min_x - expand_x
+            self.data_max_x = self.max_x + expand_x
+            self.data_min_y = self.min_y - expand_y
+            self.data_max_y = self.max_y + expand_y
         else:
             # No rotation - data bounds same as map bounds
             self.data_min_x = self.min_x
@@ -382,12 +397,17 @@ class MapConfig:
 
         # Recalculate expanded data bounds for rotation
         if self.rotation_deg != 0:
-            diagonal = math.sqrt(width_m**2 + height_m**2)
-            expand_buffer = (diagonal / 2) - min(width_m, height_m) / 2 + 500
-            self.data_min_x = self.min_x - expand_buffer
-            self.data_max_x = self.max_x + expand_buffer
-            self.data_min_y = self.min_y - expand_buffer
-            self.data_max_y = self.max_y + expand_buffer
+            angle_rad = math.radians(abs(self.rotation_deg))
+            cos_a = abs(math.cos(angle_rad))
+            sin_a = abs(math.sin(angle_rad))
+            rotated_width = width_m * cos_a + height_m * sin_a
+            rotated_height = width_m * sin_a + height_m * cos_a
+            expand_x = (rotated_width - width_m) / 2 + 500
+            expand_y = (rotated_height - height_m) / 2 + 500
+            self.data_min_x = self.min_x - expand_x
+            self.data_max_x = self.max_x + expand_x
+            self.data_min_y = self.min_y - expand_y
+            self.data_max_y = self.max_y + expand_y
         else:
             self.data_min_x = self.min_x
             self.data_max_x = self.max_x
@@ -489,12 +509,9 @@ def generate_contours(
     dem_min_x, dem_min_y = transformer.transform(config.data_min_x, config.data_min_y)
     dem_max_x, dem_max_y = transformer.transform(config.data_max_x, config.data_max_y)
 
-    # Add buffer for edge contours
-    buffer = 0.01  # degrees
-    dem_min_x -= buffer
-    dem_min_y -= buffer
-    dem_max_x += buffer
-    dem_max_y += buffer
+    # Note: No buffer needed here because data bounds are already expanded for rotation
+    # Adding a buffer causes contours to extend beyond the data area, which creates
+    # offset issues when the rotation transform is applied
 
     # Read DEM window
     try:
@@ -543,14 +560,22 @@ def generate_contours(
                 continue
 
             # Convert pixel coords to world coords
+            # Note: skimage.find_contours returns (row, col) as floating point indices
+            # where (0,0) is the top-left corner of the array.
             coords = []
             for row, col in line:
-                # Pixel to CRS coordinates
+                # Pixel to WGS84 coordinates
                 x = window_transform.c + col * window_transform.a
                 y = window_transform.f + row * window_transform.e
 
-                # Transform to grid CRS
+                # Transform to grid CRS (UTM)
                 gx, gy = transformer_to_grid.transform(x, y)
+
+                # Apply offset to correct SRTM/OSM misalignment
+                # SRTM DEM can be shifted relative to OSM data
+                gx -= DEM_EASTING_OFFSET_M
+                gy -= DEM_NORTHING_OFFSET_M
+
                 coords.append((gx, gy))
 
             if len(coords) >= 2:
@@ -877,8 +902,15 @@ def load_buildings(config: MapConfig) -> gpd.GeoDataFrame:
         return gpd.GeoDataFrame()
 
 
-def load_optional_features(config: MapConfig, filename: str, feature_name: str) -> gpd.GeoDataFrame:
-    """Load optional GeoJSON features within map bounds."""
+def load_optional_features(config: MapConfig, filename: str, feature_name: str, buffer_m: float = 100) -> gpd.GeoDataFrame:
+    """Load optional GeoJSON features within map bounds.
+
+    Args:
+        config: Map configuration
+        filename: Name of the GeoJSON file
+        feature_name: Display name for logging
+        buffer_m: Buffer in meters beyond data bounds (default 100m, use larger for coastline)
+    """
     feature_path = config.data_path / filename
     if not feature_path.exists():
         return gpd.GeoDataFrame()
@@ -897,10 +929,10 @@ def load_optional_features(config: MapConfig, filename: str, feature_name: str) 
 
         # Clip to data bounds with buffer
         map_bounds = box(
-            config.data_min_x - 100,
-            config.data_min_y - 100,
-            config.data_max_x + 100,
-            config.data_max_y + 100
+            config.data_min_x - buffer_m,
+            config.data_min_y - buffer_m,
+            config.data_max_x + buffer_m,
+            config.data_max_y + buffer_m
         )
         features = features[features.intersects(map_bounds)]
         print(f"    Filtered to {len(features)} {feature_name} in bounds")
@@ -1539,11 +1571,21 @@ def render_tactical_svg(
     # Layer 1: Base terrain fill
     # If we have islands, render them as base fill (ocean is below)
     # Otherwise, render full playable area as base fill
+    # When rotated, use expanded data bounds to cover corners after rotation
+    if config.rotation_deg != 0:
+        # Create expanded coverage area from data bounds for rotation
+        from shapely.geometry import box as shapely_box
+        rotation_coverage = shapely_box(config.data_min_x, config.data_min_y,
+                                        config.data_max_x, config.data_max_y)
+    else:
+        rotation_coverage = None
+
     if detected_island_polygons:
         print("  Rendering island polygons as base terrain...")
-        # Clip islands to playable area and render
+        # For rotated maps, clip islands to expanded area; for non-rotated, clip to playable_area
+        clip_area = rotation_coverage if rotation_coverage else playable_area
         for island in detected_island_polygons:
-            clipped = island.intersection(playable_area)
+            clipped = island.intersection(clip_area)
             if clipped.is_empty:
                 continue
             polys_to_render = []
@@ -1561,17 +1603,18 @@ def render_tactical_svg(
                     stroke="none",
                 ))
     else:
-        # No islands - use full playable area (mainland map)
-        if playable_area.geom_type == "Polygon":
-            coords = list(playable_area.exterior.coords)
+        # No islands - use playable_area for non-rotated, expanded for rotated
+        coverage_area = rotation_coverage if rotation_coverage else playable_area
+        if coverage_area.geom_type == "Polygon":
+            coords = list(coverage_area.exterior.coords)
             svg_points = [to_svg(x, y) for x, y in coords]
             layer_terrain_open.add(dwg.polygon(
                 points=svg_points,
                 fill=TERRAIN_COLORS["open"],
                 stroke="none",
             ))
-        elif playable_area.geom_type == "MultiPolygon":
-            for poly in playable_area.geoms:
+        elif coverage_area.geom_type == "MultiPolygon":
+            for poly in coverage_area.geoms:
                 coords = list(poly.exterior.coords)
                 svg_points = [to_svg(x, y) for x, y in coords]
                 layer_terrain_open.add(dwg.polygon(
@@ -2382,8 +2425,15 @@ def render_tactical_svg(
                     stroke_width=BUILDING_OUTLINE_WIDTH_M,
                 ))
 
-    # Layer 4: Contour lines (unclipped - frame will mask edges)
+    # Layer 4: Contour lines
     print("  Rendering contours...")
+
+    # Create a clip box for contours based on DATA bounds
+    # This ensures contours fill the rotated area but don't extend beyond
+    # where other features exist (which would cause offset issues)
+    from shapely.geometry import box as shapely_box
+    contour_clip_box = shapely_box(config.data_min_x, config.data_min_y,
+                                   config.data_max_x, config.data_max_y)
 
     # Helper function to get position and angle along a line at a given distance
     def get_point_and_angle_at_distance(line_coords, target_distance):
@@ -2431,11 +2481,19 @@ def render_tactical_svg(
         if is_index and elevation == 0:
             continue
 
-        # Handle multi-linestrings
-        if geom.geom_type == "MultiLineString":
-            lines = list(geom.geoms)
-        elif geom.geom_type == "LineString":
-            lines = [geom]
+        # Clip contour to data bounds to prevent offset issues with rotation
+        clipped_geom = geom.intersection(contour_clip_box)
+        if clipped_geom.is_empty:
+            continue
+
+        # Handle multi-linestrings (clipping can produce multi-part geometries)
+        if clipped_geom.geom_type == "MultiLineString":
+            lines = list(clipped_geom.geoms)
+        elif clipped_geom.geom_type == "LineString":
+            lines = [clipped_geom]
+        elif clipped_geom.geom_type == "GeometryCollection":
+            # Extract only LineStrings from collection
+            lines = [g for g in clipped_geom.geoms if g.geom_type == "LineString"]
         else:
             continue
 
@@ -3200,7 +3258,10 @@ def render_tactical_svg(
             id="Rotated_Content",
             transform=f"rotate({config.rotation_deg}, {rot_cx}, {rot_cy})"
         )
-        # Geographic features rotate with the terrain (NOT the base open fill)
+        # Base layers at bottom of rotated content (must rotate with terrain)
+        rotated_content.add(layer_ocean)             # Ocean (below all terrain)
+        rotated_content.add(layer_terrain_open)      # Open terrain fill
+        # Geographic features rotate with the terrain
         rotated_content.add(layer_terrain_water)     # Water polygons
         rotated_content.add(layer_terrain_marsh)     # Marsh polygons
         rotated_content.add(layer_terrain_forest)    # Forest polygons
@@ -3250,10 +3311,7 @@ def render_tactical_svg(
         rotated_content.add(layer_mgrs_grid)         # MGRS grid (real-world coords)
         # Reference tiles at very bottom (hidden, for artist reference)
         master_group.add(rotated_reference)
-        # Ocean layer below terrain (terrain covers islands)
-        master_group.add(layer_ocean)
-        # Base open terrain matches hex grid (unrotated)
-        master_group.add(layer_terrain_open)
+        # Rotated content includes ocean, terrain_open, and all geographic features
         master_group.add(rotated_content)
         # Out-of-play frame stays UNROTATED - clips the rotated content
         master_group.add(layer_out_of_play_frame)
@@ -3382,8 +3440,11 @@ def render_tactical_svg(
     print("  Added print guide lines (trim=magenta, bleed=cyan)")
 
     # Save
+    save_start = time.time()
+    print("  Writing SVG file...", flush=True)
     dwg.save()
-    print(f"  Saved to {output_path}")
+    save_time = time.time() - save_start
+    print(f"  Saved to {output_path} ({save_time:.1f}s)", flush=True)
 
 
 def load_config_from_file() -> Optional[MapConfig]:
@@ -3624,7 +3685,8 @@ def main():
     farmland = load_optional_features(config, "farmland.geojson", "farmland")
     cliffs = load_optional_features(config, "cliffs.geojson", "cliffs")
     waterways_area = load_optional_features(config, "waterways_area.geojson", "waterways_area")
-    coastline = load_optional_features(config, "coastline.geojson", "coastline")
+    # Use larger buffer for coastline to ensure complete island rings are detected
+    coastline = load_optional_features(config, "coastline.geojson", "coastline", buffer_m=5000)
 
     # Load new features (added for tactical relevance)
     mangrove = load_optional_features(config, "mangrove.geojson", "mangrove")
