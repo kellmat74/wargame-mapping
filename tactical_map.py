@@ -3216,7 +3216,7 @@ def render_tactical_svg(
     else:
         # Non-rotated layer order
         master_group.add(layer_reference_tiles)   # Reference tiles (hidden)
-        master_group.add(layer_ocean)             # Ocean (below terrain, terrain covers islands)
+        master_group.add(layer_ocean)             # Ocean (below terrain, land polygons on top)
         master_group.add(layer_terrain_open)      # Open terrain fill
         master_group.add(layer_terrain_water)     # Water polygons (ponds, etc.)
         master_group.add(layer_terrain_marsh)     # Marsh polygons
@@ -3880,7 +3880,8 @@ def main():
     farmland = load_optional_features(config, "farmland.geojson", "farmland")
     cliffs = load_optional_features(config, "cliffs.geojson", "cliffs")
     waterways_area = load_optional_features(config, "waterways_area.geojson", "waterways_area")
-    # Use larger buffer for coastline to ensure complete island rings are detected
+    # Coastline is rendered as a visual line feature on top of terrain
+    # Use larger buffer to ensure complete coastline segments are included for rendering
     coastline = load_optional_features(config, "coastline.geojson", "coastline", buffer_m=5000)
 
     # Load OSM land polygons for cleaner ocean/land rendering
