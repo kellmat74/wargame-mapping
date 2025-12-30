@@ -119,7 +119,7 @@ MGRS_GRID_COLOR = "#a8a8a8"       # Medium grey for MGRS grid
 MGRS_EASTING_LABEL_COLOR = "#228b22"   # Light green for easting labels
 MGRS_NORTHING_LABEL_COLOR = "#4169e1"  # Light blue for northing labels
 MGRS_GRID_WIDTH_M = 3             # MGRS grid line width in meters
-MGRS_LABEL_SIZE_M = 40            # MGRS label font size in meters
+MGRS_LABEL_SIZE_M = 80            # MGRS label font size in meters
 
 HEX_GRID_COLOR = "#5e5959"        # Grey for hex grid
 HEX_GRID_WIDTH_M = 5              # Hex line width in meters
@@ -2556,7 +2556,8 @@ def render_tactical_svg(
         ))
 
     # Layer 8: MGRS Grid (light grey, subtle)
-    # Grid lines clipped to playable area, labels positioned at hex boundary in margin
+    # Grid lines clipped to playable area, labels at intersection with centermost perpendicular line
+    # Labels rotate with map to indicate north direction (top of numbers = north)
     if mgrs_grid:
         print("  Rendering MGRS grid...")
         # Use expanded bounds for initial line generation to ensure full coverage
@@ -2568,7 +2569,6 @@ def render_tactical_svg(
             config.data_max_y + mgrs_buffer
         )
 
-        # For label positioning, we need to find where rotated lines cross the hex boundary
         # Rotation parameters - rotation center is center of trim area
         rot_cx = content_offset_m + trim_width_m / 2
         rot_cy = content_offset_m + trim_height_m / 2
@@ -2583,30 +2583,12 @@ def render_tactical_svg(
 
         # Get hex boundary in SVG coords for clipping and intersection testing
         if playable_svg_poly.geom_type == "Polygon":
-            hex_boundary = playable_svg_poly.exterior
             hex_boundary_poly = playable_svg_poly
         else:
-            hex_boundary = playable_svg_poly.convex_hull.exterior
             hex_boundary_poly = playable_svg_poly.convex_hull
 
-        # Label offset along the line from boundary (into hex grid)
-        label_inset = 60  # Distance along line to move label inside hex grid
-
-        # Bounds for label visibility (must be within viewBox with padding)
-        label_min_x = 10
-        label_max_x = viewbox_width - 10
-        label_min_y = MGRS_LABEL_SIZE_M  # Leave room for text at top
-        label_max_y = viewbox_height - 10
-
-        def is_label_visible(x, y):
-            """Check if label position is within viewBox bounds."""
-            return label_min_x <= x <= label_max_x and label_min_y <= y <= label_max_y
-
         # Calculate expanded clipping area for rotation
-        # When content rotates, we need lines to extend beyond the hex boundary
-        # to fill the visible area after rotation
         if config.rotation_deg != 0:
-            # Expand clipping area to cover diagonal of viewbox
             rotation_buffer = max(viewbox_width, viewbox_height) * 0.5
             clip_poly = box(
                 -rotation_buffer,
@@ -2615,10 +2597,17 @@ def render_tactical_svg(
                 viewbox_height_with_bleed + rotation_buffer
             )
         else:
-            # No rotation - clip to hex boundary
             clip_poly = hex_boundary_poly
 
-        # Draw vertical lines (easting lines)
+        # Collect line info for rendering and labeling
+        easting_lines_info = []  # N-S lines (vertical in unrotated view)
+        northing_lines_info = []  # E-W lines (horizontal in unrotated view)
+
+        # Center of hex grid in SVG coordinates (for centermost line selection)
+        hex_center_svg_x = content_offset_m + play_margin_left_m + center_offset_x_m + hex_grid_width / 2
+        hex_center_svg_y = content_offset_m + play_margin_top_m + center_offset_y_m + hex_grid_height / 2
+
+        # Draw vertical lines (easting/N-S lines) and collect info
         for line_info in mgrs_grid['vertical_lines']:
             line_geom = LineString([line_info['start'], line_info['end']])
             clipped = line_geom.intersection(map_box)
@@ -2628,90 +2617,41 @@ def render_tactical_svg(
 
             # Convert to SVG coordinates
             svg_points = [to_svg(x, y) for x, y in clipped.coords]
-
-            # Clip the SVG line
             svg_line = LineString(svg_points)
             clipped_svg = svg_line.intersection(clip_poly)
 
+            if clipped_svg.is_empty:
+                continue
+
             # Render the clipped line(s)
-            if not clipped_svg.is_empty:
-                if clipped_svg.geom_type == 'LineString':
-                    clipped_lines = [clipped_svg]
-                elif clipped_svg.geom_type == 'MultiLineString':
-                    clipped_lines = list(clipped_svg.geoms)
-                else:
-                    clipped_lines = []
+            if clipped_svg.geom_type == 'LineString':
+                clipped_lines = [clipped_svg]
+            elif clipped_svg.geom_type == 'MultiLineString':
+                clipped_lines = list(clipped_svg.geoms)
+            else:
+                clipped_lines = []
 
-                for cline in clipped_lines:
-                    if len(cline.coords) >= 2:
-                        layer_mgrs_grid.add(dwg.polyline(
-                            points=list(cline.coords),
-                            stroke=MGRS_GRID_COLOR,
-                            stroke_width=MGRS_GRID_WIDTH_M,
-                            fill="none",
-                        ))
+            for cline in clipped_lines:
+                if len(cline.coords) >= 2:
+                    layer_mgrs_grid.add(dwg.polyline(
+                        points=list(cline.coords),
+                        stroke=MGRS_GRID_COLOR,
+                        stroke_width=MGRS_GRID_WIDTH_M,
+                        fill="none",
+                    ))
 
-                # Easting label (last 2 digits of km)
-                easting_km = int(line_info['utm_value'] / 1000) % 100
-                label_text = f"{easting_km:02d}"
+            # Store line info for labeling
+            easting_km = int(line_info['utm_value'] / 1000) % 100
+            label_text = f"{easting_km:02d}"
 
-                # Calculate rotated line and find intersections with hex boundary
-                rotated_points = [rotate_point(x, y) for x, y in svg_points]
-                rotated_line = LineString(rotated_points)
+            easting_lines_info.append({
+                'label': label_text,
+                'utm_value': line_info['utm_value'],
+                'svg_line': svg_line,
+                'svg_x': svg_points[0][0],
+            })
 
-                try:
-                    intersections = rotated_line.intersection(hex_boundary)
-                    if not intersections.is_empty:
-                        # Get intersection points
-                        if intersections.geom_type == 'Point':
-                            int_points = [(intersections.x, intersections.y)]
-                        elif intersections.geom_type == 'MultiPoint':
-                            int_points = [(p.x, p.y) for p in intersections.geoms]
-                        else:
-                            int_points = []
-
-                        for ix, iy in int_points:
-                            # Move label along the line direction (into hex grid)
-                            # Get line direction from rotated points
-                            if len(rotated_points) >= 2:
-                                lx1, ly1 = rotated_points[0]
-                                lx2, ly2 = rotated_points[-1]
-                                line_dx = lx2 - lx1
-                                line_dy = ly2 - ly1
-                                line_len = math.sqrt(line_dx*line_dx + line_dy*line_dy)
-                                if line_len > 0:
-                                    # Normalize line direction
-                                    line_dx /= line_len
-                                    line_dy /= line_len
-                                    # Determine which direction is "into" the grid (toward center)
-                                    to_center_dx = rot_cx - ix
-                                    to_center_dy = rot_cy - iy
-                                    # Dot product to see which line direction points toward center
-                                    dot = line_dx * to_center_dx + line_dy * to_center_dy
-                                    if dot < 0:
-                                        line_dx, line_dy = -line_dx, -line_dy
-                                    # Move along line into hex grid
-                                    ox = ix + line_dx * label_inset
-                                    oy = iy + line_dy * label_inset
-                                else:
-                                    ox, oy = ix, iy
-                            else:
-                                ox, oy = ix, iy
-
-                            # Only add label if within viewBox bounds
-                            if is_label_visible(ox, oy):
-                                layer_mgrs_labels.add(dwg.text(
-                                    label_text,
-                                    insert=(ox, oy + MGRS_LABEL_SIZE_M * 0.35),
-                                    text_anchor="middle",
-                                    font_size=MGRS_LABEL_SIZE_M,
-                                    fill=MGRS_EASTING_LABEL_COLOR,
-                                    font_family="sans-serif",
-                                ))
-                except:
-                    pass  # Skip if intersection fails
-
-        # Draw horizontal lines (northing lines)
+        # Draw horizontal lines (northing/E-W lines) and collect info
         for line_info in mgrs_grid['horizontal_lines']:
             line_geom = LineString([line_info['start'], line_info['end']])
             clipped = line_geom.intersection(map_box)
@@ -2721,88 +2661,122 @@ def render_tactical_svg(
 
             # Convert to SVG coordinates
             svg_points = [to_svg(x, y) for x, y in clipped.coords]
-
-            # Clip the SVG line
             svg_line = LineString(svg_points)
             clipped_svg = svg_line.intersection(clip_poly)
 
+            if clipped_svg.is_empty:
+                continue
+
             # Render the clipped line(s)
-            if not clipped_svg.is_empty:
-                if clipped_svg.geom_type == 'LineString':
-                    clipped_lines = [clipped_svg]
-                elif clipped_svg.geom_type == 'MultiLineString':
-                    clipped_lines = list(clipped_svg.geoms)
-                else:
-                    clipped_lines = []
+            if clipped_svg.geom_type == 'LineString':
+                clipped_lines = [clipped_svg]
+            elif clipped_svg.geom_type == 'MultiLineString':
+                clipped_lines = list(clipped_svg.geoms)
+            else:
+                clipped_lines = []
 
-                for cline in clipped_lines:
-                    if len(cline.coords) >= 2:
-                        layer_mgrs_grid.add(dwg.polyline(
-                            points=list(cline.coords),
-                            stroke=MGRS_GRID_COLOR,
-                            stroke_width=MGRS_GRID_WIDTH_M,
-                            fill="none",
-                        ))
+            for cline in clipped_lines:
+                if len(cline.coords) >= 2:
+                    layer_mgrs_grid.add(dwg.polyline(
+                        points=list(cline.coords),
+                        stroke=MGRS_GRID_COLOR,
+                        stroke_width=MGRS_GRID_WIDTH_M,
+                        fill="none",
+                    ))
 
-                # Northing label (last 2 digits of km)
-                northing_km = int(line_info['utm_value'] / 1000) % 100
-                label_text = f"{northing_km:02d}"
+            # Store line info for labeling
+            northing_km = int(line_info['utm_value'] / 1000) % 100
+            label_text = f"{northing_km:02d}"
 
-                # Calculate rotated line and find intersections with hex boundary
-                rotated_points = [rotate_point(x, y) for x, y in svg_points]
-                rotated_line = LineString(rotated_points)
+            northing_lines_info.append({
+                'label': label_text,
+                'utm_value': line_info['utm_value'],
+                'svg_line': svg_line,
+                'svg_y': svg_points[0][1],
+            })
 
+        # Find centermost E-W line (for placing easting labels)
+        centermost_ew_line = None
+        if northing_lines_info:
+            centermost_ew_line = min(northing_lines_info,
+                key=lambda x: abs(x['svg_y'] - hex_center_svg_y))
+
+        # Find centermost N-S line (for placing northing labels)
+        centermost_ns_line = None
+        if easting_lines_info:
+            centermost_ns_line = min(easting_lines_info,
+                key=lambda x: abs(x['svg_x'] - hex_center_svg_x))
+
+        # Label settings
+        label_color = "#808080"  # Medium grey
+        label_rotation = config.rotation_deg  # Rotate with map to indicate north
+        label_offset_m = 500  # Offset labels from centerline to clarify which line they label
+
+        easting_label_count = 0
+        northing_label_count = 0
+
+        # Place easting labels (on N-S lines) at intersection with centermost E-W line
+        # Offset 500m north (in SVG pre-rotation coords, north = -Y)
+        if centermost_ew_line:
+            for line_info in easting_lines_info:
                 try:
-                    intersections = rotated_line.intersection(hex_boundary)
-                    if not intersections.is_empty:
-                        # Get intersection points
-                        if intersections.geom_type == 'Point':
-                            int_points = [(intersections.x, intersections.y)]
-                        elif intersections.geom_type == 'MultiPoint':
-                            int_points = [(p.x, p.y) for p in intersections.geoms]
-                        else:
-                            int_points = []
+                    intersection = line_info['svg_line'].intersection(centermost_ew_line['svg_line'])
+                    if not intersection.is_empty and intersection.geom_type == 'Point':
+                        # Apply offset north (subtract from Y in SVG coords) before rotation
+                        offset_x = intersection.x
+                        offset_y = intersection.y - label_offset_m
+                        # Rotate the offset point
+                        rot_x, rot_y = rotate_point(offset_x, offset_y)
 
-                        for ix, iy in int_points:
-                            # Move label along the line direction (into hex grid)
-                            # Get line direction from rotated points
-                            if len(rotated_points) >= 2:
-                                lx1, ly1 = rotated_points[0]
-                                lx2, ly2 = rotated_points[-1]
-                                line_dx = lx2 - lx1
-                                line_dy = ly2 - ly1
-                                line_len = math.sqrt(line_dx*line_dx + line_dy*line_dy)
-                                if line_len > 0:
-                                    # Normalize line direction
-                                    line_dx /= line_len
-                                    line_dy /= line_len
-                                    # Determine which direction is "into" the grid (toward center)
-                                    to_center_dx = rot_cx - ix
-                                    to_center_dy = rot_cy - iy
-                                    # Dot product to see which line direction points toward center
-                                    dot = line_dx * to_center_dx + line_dy * to_center_dy
-                                    if dot < 0:
-                                        line_dx, line_dy = -line_dx, -line_dy
-                                    # Move along line into hex grid
-                                    ox = ix + line_dx * label_inset
-                                    oy = iy + line_dy * label_inset
-                                else:
-                                    ox, oy = ix, iy
-                            else:
-                                ox, oy = ix, iy
-
-                            # Only add label if within viewBox bounds
-                            if is_label_visible(ox, oy):
-                                layer_mgrs_labels.add(dwg.text(
-                                    label_text,
-                                    insert=(ox, oy + MGRS_LABEL_SIZE_M * 0.35),
-                                    text_anchor="middle",
-                                    font_size=MGRS_LABEL_SIZE_M,
-                                    fill=MGRS_NORTHING_LABEL_COLOR,
-                                    font_family="sans-serif",
-                                ))
+                        # Check if within hex boundary after rotation
+                        if hex_boundary_poly.contains(Point(rot_x, rot_y)):
+                            text_elem = dwg.text(
+                                line_info['label'],
+                                insert=(rot_x, rot_y + MGRS_LABEL_SIZE_M * 0.35),
+                                text_anchor="middle",
+                                font_size=MGRS_LABEL_SIZE_M,
+                                fill=label_color,
+                                font_family="sans-serif",
+                            )
+                            if label_rotation != 0:
+                                text_elem['transform'] = f"rotate({label_rotation}, {rot_x}, {rot_y})"
+                            layer_mgrs_labels.add(text_elem)
+                            easting_label_count += 1
                 except:
-                    pass  # Skip if intersection fails
+                    pass
+
+        # Place northing labels (on E-W lines) at intersection with centermost N-S line
+        # Offset 500m east (in SVG pre-rotation coords, east = +X)
+        if centermost_ns_line:
+            for line_info in northing_lines_info:
+                try:
+                    intersection = line_info['svg_line'].intersection(centermost_ns_line['svg_line'])
+                    if not intersection.is_empty and intersection.geom_type == 'Point':
+                        # Apply offset east (add to X in SVG coords) before rotation
+                        offset_x = intersection.x + label_offset_m
+                        offset_y = intersection.y
+                        # Rotate the offset point
+                        rot_x, rot_y = rotate_point(offset_x, offset_y)
+
+                        # Check if within hex boundary after rotation
+                        if hex_boundary_poly.contains(Point(rot_x, rot_y)):
+                            text_elem = dwg.text(
+                                line_info['label'],
+                                insert=(rot_x, rot_y + MGRS_LABEL_SIZE_M * 0.35),
+                                text_anchor="middle",
+                                font_size=MGRS_LABEL_SIZE_M,
+                                fill=label_color,
+                                font_family="sans-serif",
+                            )
+                            if label_rotation != 0:
+                                text_elem['transform'] = f"rotate({label_rotation}, {rot_x}, {rot_y})"
+                            layer_mgrs_labels.add(text_elem)
+                            northing_label_count += 1
+                except:
+                    pass
+
+        print(f"    Placed {easting_label_count} easting labels along centermost E-W line")
+        print(f"    Placed {northing_label_count} northing labels along centermost N-S line")
 
     # Layer 9: Map data block (in data margin area - outside bleed, for SVG reference only)
     print("  Rendering map data block...")
