@@ -29,6 +29,12 @@ import svgwrite
 
 # Local utilities
 from map_utils import Bounds, RotationConfig, CoordinateTransformer, LayerManager, LayerZOrder
+from render_helpers import (
+    get_point_and_angle_at_distance,
+    get_line_length,
+    render_polygons as render_polygons_helper,
+    render_linestrings as render_linestrings_helper,
+)
 
 # === Configuration ===
 DATA_DIR = Path("data")
@@ -1930,71 +1936,12 @@ def render_tactical_svg(
                 size=(svg_width, svg_height),
             ))
 
-        # Helper function for rendering linestrings
+        # Helper functions - delegate to render_helpers module
         def render_linestrings(gdf, layer, color, width, dash=None):
-            if gdf is None or gdf.empty:
-                return 0
-            count = 0
-            for _, row in gdf.iterrows():
-                geom = row.geometry
-                if geom is None:
-                    continue
+            return render_linestrings_helper(gdf, layer, dwg, color, width, to_svg, dash)
 
-                if geom.geom_type == "LineString":
-                    lines = [geom]
-                elif geom.geom_type == "MultiLineString":
-                    lines = list(geom.geoms)
-                else:
-                    continue
-
-                for line in lines:
-                    if len(line.coords) < 2:
-                        continue
-                    svg_points = [to_svg(x, y) for x, y in line.coords]
-                    props = {
-                        'points': svg_points,
-                        'stroke': color,
-                        'stroke_width': width,
-                        'fill': 'none',
-                    }
-                    if dash:
-                        props['stroke_dasharray'] = dash
-                    layer.add(dwg.polyline(**props))
-                    count += 1
-            return count
-
-        # Helper function for rendering polygons
         def render_polygons(gdf, layer, fill_color, stroke_color=None, stroke_width=0):
-            if gdf is None or gdf.empty:
-                return 0
-            count = 0
-            for _, row in gdf.iterrows():
-                geom = row.geometry
-                if geom is None:
-                    continue
-
-                if geom.geom_type == "Polygon":
-                    polys = [geom]
-                elif geom.geom_type == "MultiPolygon":
-                    polys = list(geom.geoms)
-                else:
-                    continue
-
-                for poly in polys:
-                    coords = list(poly.exterior.coords)
-                    svg_points = [to_svg(x, y) for x, y in coords]
-                    props = {
-                        'points': svg_points,
-                        'fill': fill_color,
-                    }
-                    if stroke_color:
-                        props['stroke'] = stroke_color
-                        props['stroke_width'] = stroke_width
-                    else:
-                        props['stroke'] = 'none'
-                    layer.add(dwg.polygon(**props))
-                    count += 1
-            return count
+            return render_polygons_helper(gdf, layer, dwg, fill_color, to_svg, stroke_color, stroke_width)
 
         # Farmland areas
         farmland = enhanced_features.get('farmland')
@@ -2479,40 +2426,8 @@ def render_tactical_svg(
     contour_clip_box = shapely_box(config.data_min_x, config.data_min_y,
                                    config.data_max_x, config.data_max_y)
 
-    # Helper function to get position and angle along a line at a given distance
-    def get_point_and_angle_at_distance(line_coords, target_distance):
-        """Get (x, y, angle_degrees) at target_distance along the line."""
-        cumulative = 0
-        for i in range(len(line_coords) - 1):
-            x1, y1 = line_coords[i]
-            x2, y2 = line_coords[i + 1]
-            seg_len = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-
-            if cumulative + seg_len >= target_distance:
-                # Interpolate position within this segment
-                remaining = target_distance - cumulative
-                t = remaining / seg_len if seg_len > 0 else 0
-                px = x1 + t * (x2 - x1)
-                py = y1 + t * (y2 - y1)
-                # Calculate angle (in degrees, for SVG rotation)
-                angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
-                return (px, py, angle)
-            cumulative += seg_len
-
-        # Return end point if distance exceeds line length
-        x1, y1 = line_coords[-2]
-        x2, y2 = line_coords[-1]
-        angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
-        return (line_coords[-1][0], line_coords[-1][1], angle)
-
-    def get_line_length(line_coords):
-        """Calculate total length of a line from its coordinates."""
-        total = 0
-        for i in range(len(line_coords) - 1):
-            x1, y1 = line_coords[i]
-            x2, y2 = line_coords[i + 1]
-            total += math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-        return total
+    # Note: get_point_and_angle_at_distance and get_line_length are
+    # imported from render_helpers module
 
     contour_label_count = 0
 
