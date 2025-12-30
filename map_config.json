@@ -1,7 +1,8 @@
 {
-  "name": "Batanes",
-  "center_lat": 20.761281821149954,
-  "center_lon": 121.83693539275112,
-  "region": "51Q/UC",
-  "rotation_deg": 50
+  "name": "Yonaguni",
+  "center_lat": 24.453992,
+  "center_lon": 122.988395,
+  "region": "51R/VH",
+  "rotation_deg": -20,
+  "_adjustment_notes": "Shifted 300m right (map-relative) from original center (24.454914, 122.985613)"
 }

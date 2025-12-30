@@ -172,18 +172,54 @@ The `render_tactical_svg` function is **~2200 lines**.
 - Reduced ~95 lines of duplicated code
 - All 44 tests still passing
 
+### Session 6 (2025-12-30 - Multi-MGRS-Square Support)
+- Implemented multi-MGRS-square data loading for maps near square boundaries
+- Added `get_mgrs_squares_for_bounds()` to detect all squares covering data bounds
+- Added `get_all_data_paths()` and `load_geojson_from_all_squares()` for multi-source loading
+- Modified `load_dem()` to merge multiple DEMs using rasterio.merge
+- Auto-extracts missing adjacent squares from available PBFs
+- **Fixed terrain_open/island detection issue** (see corrections below)
+
 ### Git Commits
 1. `fb4cf92` - Add DEM alignment offset and document contour rotation issue
 2. `a452663` - Add utility classes and pytest infrastructure for code cleanup
 3. `2770612` - Add render_helpers module with extracted rendering functions
 4. `0a4f442` - Update issue documentation
 5. `e10ea13` - Integrate render_helpers into render_tactical_svg
+6. `047e6a1` - Fix island detection for multi-MGRS-square coastline data
+
+---
+
+## Corrections to Previous Assumptions
+
+### ✅ CORRECTED: terrain_open "Small Polygons" Issue
+
+**Original assumption**: When terrain_open showed as small scattered polygons after multi-square implementation, the assumption was that coastline data from multiple MGRS squares wasn't forming proper closed rings due to overlapping/duplicate segments.
+
+**Actual root cause**: The detected island polygons were **not sorted by area**. The list had small polygons first (from pre-existing polygon geometries), so when rendering, tiny fragments were processed before the main 28.91 km² island polygon. The main island was in the list but at a later index.
+
+**The fix**:
+1. Added `unary_union` before `linemerge` (this does help with overlapping segments)
+2. **Critical fix**: Sort `detected_island_polygons` by area descending so largest renders first
+3. Added `polygonize` fallback if linemerge doesn't find closed rings
+
+**Verification**: After sorting, the main island polygon (3306 coordinate points, 28.91 km²) renders correctly as the base terrain fill.
+
+### Yonaguni Status: ✅ WORKING
+
+Yonaguni now works correctly with:
+- -20° CCW rotation
+- 300m map-relative shift (110° bearing = ESE)
+- Multi-MGRS-square data from 4 squares: 51R/VG, VH, WG, WH
+- 101 contour segments (merged from all squares)
+- 31 island polygons detected, largest 28.91 km²
 
 ---
 
 ## Remaining Work
 
-### Bug Fix (Contour Offset)
+### Bug Fix (Batanes Contour Offset)
+The Batanes-specific contour offset issue remains unresolved:
 1. **Investigate the 100m vs 1.5km discrepancy** - Why does measured offset differ so much from visual?
 2. **Try larger DEM offset values** - Maybe -150m isn't enough
 3. **Consider per-region offset configuration** - Different regions may need different corrections
