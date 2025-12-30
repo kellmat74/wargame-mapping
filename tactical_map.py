@@ -481,6 +481,56 @@ class MapConfig:
         )
 
 
+def get_mgrs_squares_for_bounds(data_bounds: Bounds, grid_crs: str = GRID_CRS) -> List[str]:
+    """Get all MGRS 100km squares that cover the given data bounds.
+
+    Args:
+        data_bounds: Bounds object with UTM coordinates
+        grid_crs: The CRS of the bounds (default: GRID_CRS)
+
+    Returns:
+        List of MGRS square strings like ["51R/VH", "51R/WH"]
+    """
+    m = mgrs.MGRS()
+    transformer = Transformer.from_crs(grid_crs, WGS84, always_xy=True)
+
+    squares = set()
+
+    # Sample corners and edges of the data bounds
+    sample_points = [
+        (data_bounds.min_x, data_bounds.min_y),  # SW
+        (data_bounds.max_x, data_bounds.min_y),  # SE
+        (data_bounds.max_x, data_bounds.max_y),  # NE
+        (data_bounds.min_x, data_bounds.max_y),  # NW
+        (data_bounds.center[0], data_bounds.min_y),  # S center
+        (data_bounds.center[0], data_bounds.max_y),  # N center
+        (data_bounds.min_x, data_bounds.center[1]),  # W center
+        (data_bounds.max_x, data_bounds.center[1]),  # E center
+        data_bounds.center,  # center
+    ]
+
+    # Also sample along edges every 1km to catch any squares we might miss
+    step = 1000  # 1km
+    for x in range(int(data_bounds.min_x), int(data_bounds.max_x) + step, step):
+        sample_points.append((float(x), data_bounds.min_y))
+        sample_points.append((float(x), data_bounds.max_y))
+    for y in range(int(data_bounds.min_y), int(data_bounds.max_y) + step, step):
+        sample_points.append((data_bounds.min_x, float(y)))
+        sample_points.append((data_bounds.max_x, float(y)))
+
+    for utm_x, utm_y in sample_points:
+        try:
+            lon, lat = transformer.transform(utm_x, utm_y)
+            mgrs_str = m.toMGRS(lat, lon, MGRSPrecision=0)  # 100km precision
+            gzd = mgrs_str[:3]  # e.g., "51R"
+            square = mgrs_str[3:5]  # e.g., "VH"
+            squares.add(f"{gzd}/{square}")
+        except Exception:
+            pass
+
+    return sorted(list(squares))
+
+
 class TacticalHexGrid:
     """Hex grid for tactical maps."""
 
@@ -530,11 +580,106 @@ class TacticalHexGrid:
 
 
 def load_dem(config: MapConfig) -> rasterio.DatasetReader:
-    """Load elevation raster."""
-    dem_path = config.data_path / "elevation.tif"
-    if not dem_path.exists():
-        raise FileNotFoundError(f"DEM not found: {dem_path}")
-    return rasterio.open(dem_path)
+    """Load elevation raster, merging from multiple MGRS squares if needed."""
+    from rasterio.merge import merge
+    from rasterio.io import MemoryFile
+
+    # Get all data paths that might have DEM data
+    data_paths = get_all_data_paths(config)
+
+    dem_files = []
+    for path in data_paths:
+        dem_path = path / "elevation.tif"
+        if dem_path.exists():
+            dem_files.append(dem_path)
+
+    if not dem_files:
+        raise FileNotFoundError(f"No DEM files found in data paths")
+
+    if len(dem_files) == 1:
+        # Single DEM, just open it directly
+        return rasterio.open(dem_files[0])
+
+    # Multiple DEMs - merge them
+    print(f"  Merging {len(dem_files)} DEM files...")
+    datasets = [rasterio.open(f) for f in dem_files]
+
+    try:
+        # Merge all DEMs
+        merged_data, merged_transform = merge(datasets)
+
+        # Get profile from first dataset and update
+        profile = datasets[0].profile.copy()
+        profile.update({
+            'height': merged_data.shape[1],
+            'width': merged_data.shape[2],
+            'transform': merged_transform,
+        })
+
+        # Write to memory file and return reader
+        memfile = MemoryFile()
+        with memfile.open(**profile) as mem_dataset:
+            mem_dataset.write(merged_data)
+
+        # Return a reader from the memory file
+        return memfile.open()
+
+    finally:
+        # Close all input datasets
+        for ds in datasets:
+            ds.close()
+
+
+def load_geojson_from_all_squares(
+    config: MapConfig,
+    filename: str,
+    alternate_filename: str = None
+) -> gpd.GeoDataFrame:
+    """Load and merge a GeoJSON file from all MGRS squares covering the data bounds.
+
+    Args:
+        config: MapConfig object
+        filename: Primary filename to look for (e.g., "roads.geojson")
+        alternate_filename: Optional alternate filename to try (e.g., "detailed_roads.geojson")
+
+    Returns:
+        Merged GeoDataFrame from all available squares
+    """
+    import pandas as pd
+
+    data_paths = get_all_data_paths(config)
+    gdfs = []
+
+    for path in data_paths:
+        # Try alternate filename first if provided
+        file_path = None
+        if alternate_filename:
+            alt_path = path / alternate_filename
+            if alt_path.exists():
+                file_path = alt_path
+
+        if file_path is None:
+            primary_path = path / filename
+            if primary_path.exists():
+                file_path = primary_path
+
+        if file_path:
+            try:
+                gdf = gpd.read_file(file_path, on_invalid="ignore")
+                if not gdf.empty:
+                    gdfs.append(gdf)
+            except Exception as e:
+                print(f"    Warning: Error loading {file_path}: {e}")
+
+    if not gdfs:
+        return gpd.GeoDataFrame()
+
+    if len(gdfs) == 1:
+        return gdfs[0]
+
+    # Concatenate all GeoDataFrames
+    merged = pd.concat(gdfs, ignore_index=True)
+    return gpd.GeoDataFrame(merged, crs=gdfs[0].crs)
 
 
 def generate_contours(
@@ -811,18 +956,16 @@ def merge_road_segments(roads: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 def load_roads(config: MapConfig) -> gpd.GeoDataFrame:
     """Load roads within map bounds (uses expanded bounds for rotation)."""
-    # Prefer detailed_roads.geojson if available (has all road types)
-    detailed_path = config.data_path / "detailed_roads.geojson"
-    roads_path = config.data_path / "roads.geojson"
-
     try:
-        if detailed_path.exists():
-            print("  Loading detailed roads...")
-            roads = gpd.read_file(detailed_path, on_invalid="ignore")
-        elif roads_path.exists():
-            print("  Loading roads...")
-            roads = gpd.read_file(roads_path, on_invalid="ignore")
-        else:
+        print("  Loading roads...")
+        # Load from all MGRS squares, preferring detailed_roads.geojson
+        roads = load_geojson_from_all_squares(
+            config,
+            "roads.geojson",
+            alternate_filename="detailed_roads.geojson"
+        )
+
+        if roads.empty:
             return gpd.GeoDataFrame()
 
         roads = roads.to_crs(GRID_CRS)
@@ -923,14 +1066,15 @@ def generate_mgrs_grid(config: MapConfig) -> dict:
 
 def load_buildings(config: MapConfig) -> gpd.GeoDataFrame:
     """Load buildings within map bounds (uses expanded bounds for rotation)."""
-    buildings_path = config.data_path / "buildings.geojson"
-    if not buildings_path.exists():
-        print("  No buildings data found")
-        return gpd.GeoDataFrame()
-
     print("  Loading buildings...")
     try:
-        buildings = gpd.read_file(buildings_path, on_invalid="ignore")
+        # Load from all MGRS squares
+        buildings = load_geojson_from_all_squares(config, "buildings.geojson")
+
+        if buildings.empty:
+            print("  No buildings data found")
+            return gpd.GeoDataFrame()
+
         buildings = buildings.to_crs(GRID_CRS)
 
         # Remove invalid geometries
@@ -961,15 +1105,12 @@ def load_optional_features(config: MapConfig, filename: str, feature_name: str, 
         feature_name: Display name for logging
         buffer_m: Buffer in meters beyond data bounds (default 100m, use larger for coastline)
     """
-    feature_path = config.data_path / filename
-    if not feature_path.exists():
-        return gpd.GeoDataFrame()
-
     print(f"  Loading {feature_name}...")
     try:
-        # Use on_invalid="ignore" to skip malformed geometries
-        features = gpd.read_file(feature_path, on_invalid="ignore")
-        if len(features) == 0:
+        # Load from all MGRS squares
+        features = load_geojson_from_all_squares(config, filename)
+
+        if features.empty:
             return gpd.GeoDataFrame()
 
         features = features.to_crs(GRID_CRS)
@@ -1584,7 +1725,7 @@ def render_tactical_svg(
     coastline_gdf = enhanced_features.get('coastline') if enhanced_features else None
     if coastline_gdf is not None and not coastline_gdf.empty:
         print("  Detecting islands from coastline...")
-        from shapely.ops import linemerge
+        from shapely.ops import linemerge, unary_union, polygonize
         from shapely.geometry import Polygon as ShapelyPolygon
 
         # Collect all coastline geometries
@@ -1603,20 +1744,71 @@ def render_tactical_svg(
                 detected_island_polygons.extend(list(geom.geoms))
 
         # Merge coastline segments and check if they form closed rings (islands)
+        # Use unary_union first to handle overlapping/duplicate segments from multiple MGRS squares
         if coast_lines:
-            merged_coast = linemerge(coast_lines)
-            merged_lines = []
-            if merged_coast.geom_type == 'LineString':
-                merged_lines = [merged_coast]
-            elif merged_coast.geom_type == 'MultiLineString':
-                merged_lines = list(merged_coast.geoms)
+            print(f"    Processing {len(coast_lines)} coastline segments...")
 
-            for line in merged_lines:
-                if line.is_ring:
-                    detected_island_polygons.append(ShapelyPolygon(line.coords))
+            # Step 1: Merge all coastlines using unary_union (handles overlaps and duplicates)
+            try:
+                unified = unary_union(coast_lines)
+            except Exception as e:
+                print(f"    Warning: unary_union failed: {e}, falling back to linemerge")
+                unified = None
+
+            if unified is not None:
+                # Extract lines from the unified geometry
+                unified_lines = []
+                if unified.geom_type == 'LineString':
+                    unified_lines = [unified]
+                elif unified.geom_type == 'MultiLineString':
+                    unified_lines = list(unified.geoms)
+                elif unified.geom_type == 'GeometryCollection':
+                    for g in unified.geoms:
+                        if g.geom_type == 'LineString':
+                            unified_lines.append(g)
+                        elif g.geom_type == 'MultiLineString':
+                            unified_lines.extend(list(g.geoms))
+
+                # Step 2: Use linemerge on unified lines
+                if unified_lines:
+                    merged_coast = linemerge(unified_lines)
+                    merged_lines = []
+                    if merged_coast.geom_type == 'LineString':
+                        merged_lines = [merged_coast]
+                    elif merged_coast.geom_type == 'MultiLineString':
+                        merged_lines = list(merged_coast.geoms)
+
+                    # Step 3: Check for closed rings
+                    for line in merged_lines:
+                        if line.is_ring:
+                            detected_island_polygons.append(ShapelyPolygon(line.coords))
+
+                    # Step 4: If no rings found, try polygonize which can handle near-closed lines
+                    if not detected_island_polygons:
+                        print("    No closed rings found, trying polygonize...")
+                        try:
+                            polygons = list(polygonize(merged_lines))
+                            detected_island_polygons.extend(polygons)
+                        except Exception as e:
+                            print(f"    Polygonize failed: {e}")
+            else:
+                # Fallback to original approach
+                merged_coast = linemerge(coast_lines)
+                merged_lines = []
+                if merged_coast.geom_type == 'LineString':
+                    merged_lines = [merged_coast]
+                elif merged_coast.geom_type == 'MultiLineString':
+                    merged_lines = list(merged_coast.geoms)
+
+                for line in merged_lines:
+                    if line.is_ring:
+                        detected_island_polygons.append(ShapelyPolygon(line.coords))
 
         if detected_island_polygons:
-            print(f"    Found {len(detected_island_polygons)} island polygon(s)")
+            # Sort by area (largest first) so main island renders properly
+            detected_island_polygons.sort(key=lambda p: p.area, reverse=True)
+            largest_area = detected_island_polygons[0].area if detected_island_polygons else 0
+            print(f"    Found {len(detected_island_polygons)} island polygon(s), largest: {largest_area/1e6:.2f} km²")
 
     # Layer 1: Base terrain fill
     # If we have islands, render them as base fill (ocean is below)
@@ -3460,33 +3652,38 @@ GEOFABRIK_TO_COUNTRY = {
 }
 
 
-def auto_extract_mgrs_data(config: 'MapConfig') -> str:
-    """Try to extract MGRS data from available country PBFs.
+def extract_single_mgrs_square(mgrs_region: str, available_pbfs: list) -> str:
+    """Extract data for a single MGRS square.
 
-    Returns country name if extraction succeeded, empty string otherwise.
+    Args:
+        mgrs_region: MGRS region string like "51R/VH"
+        available_pbfs: List of (region_name, pbf_path) tuples
+
+    Returns:
+        Country name if extraction succeeded, empty string otherwise.
     """
-    available_pbfs = get_available_country_pbfs()
-
-    if not available_pbfs:
-        return ""
-
-    # Parse region to get GZD and square
-    parts = config.region.split("/")
+    parts = mgrs_region.split("/")
     if len(parts) != 2:
-        print(f"  Invalid region format: {config.region}")
+        print(f"  Invalid region format: {mgrs_region}")
         return ""
 
     gzd, square = parts
     mgrs_square = f"{gzd} {square}"
+    data_path = DATA_DIR / mgrs_region
 
-    print(f"\nAttempting to extract data for {gzd}/{square}...")
-    print(f"  Available country PBFs: {', '.join(r for r, _ in available_pbfs)}")
+    # Check if already extracted
+    if data_path.exists() and (data_path / "elevation.tif").exists():
+        print(f"  {mgrs_region}: Already extracted")
+        # Try to get country from bounds.json
+        bounds_file = data_path / "bounds.json"
+        if bounds_file.exists():
+            with open(bounds_file) as f:
+                bounds_data = json.load(f)
+                geofabrik_region = bounds_data.get("source", {}).get("region", "")
+                return GEOFABRIK_TO_COUNTRY.get(geofabrik_region, geofabrik_region.title())
+        return ""
 
     for region, pbf_path in available_pbfs:
-        print(f"\n  Trying {region}...")
-
-        # Call the download script with this region
-        # It will skip the download (PBF already exists) and just extract
         cmd = [
             "python3", "download_mgrs_data_osmium.py",
             "--region", region,
@@ -3501,25 +3698,82 @@ def auto_extract_mgrs_data(config: 'MapConfig') -> str:
                 timeout=300  # 5 minute timeout for extraction
             )
 
-            # Check if extraction succeeded by looking for the data directory
-            if config.data_path.exists() and (config.data_path / "elevation.tif").exists():
+            if data_path.exists() and (data_path / "elevation.tif").exists():
                 country = GEOFABRIK_TO_COUNTRY.get(region, region.title())
-                print(f"\n  Successfully extracted data using {region} PBF")
+                print(f"  {mgrs_region}: Extracted from {region}")
                 return country
             else:
-                # Extraction ran but didn't produce data (wrong region)
                 if "Error extracting region" in result.stderr or "0 features" in result.stdout:
-                    print(f"    No data in {region} for this region")
                     continue
 
         except subprocess.TimeoutExpired:
-            print(f"    Extraction timed out for {region}")
             continue
-        except Exception as e:
-            print(f"    Error: {e}")
+        except Exception:
             continue
 
+    print(f"  {mgrs_region}: No data found in any PBF")
     return ""
+
+
+def auto_extract_mgrs_data(config: 'MapConfig') -> str:
+    """Try to extract MGRS data from available country PBFs.
+
+    Extracts the primary square plus any adjacent squares needed to cover
+    the full data bounds (accounting for rotation expansion).
+
+    Returns country name if extraction succeeded, empty string otherwise.
+    """
+    available_pbfs = get_available_country_pbfs()
+
+    if not available_pbfs:
+        return ""
+
+    # Get all MGRS squares needed to cover the data bounds
+    needed_squares = get_mgrs_squares_for_bounds(config.data_bounds)
+
+    # Ensure primary square is in the list
+    if config.region not in needed_squares:
+        needed_squares.insert(0, config.region)
+
+    print(f"\nMGRS squares needed for map coverage: {', '.join(needed_squares)}")
+    print(f"  Available country PBFs: {', '.join(r for r, _ in available_pbfs)}")
+
+    # Extract each needed square
+    country = ""
+    for mgrs_region in needed_squares:
+        result = extract_single_mgrs_square(mgrs_region, available_pbfs)
+        if result and not country:
+            country = result  # Use first successful country
+
+    # Check if primary square was extracted
+    if config.data_path.exists() and (config.data_path / "elevation.tif").exists():
+        print(f"\n  Successfully extracted data for {len(needed_squares)} square(s)")
+        return country
+
+    return ""
+
+
+def get_all_data_paths(config: 'MapConfig') -> List[Path]:
+    """Get data paths for all MGRS squares covering the data bounds.
+
+    Returns list of paths that exist and have data.
+    """
+    needed_squares = get_mgrs_squares_for_bounds(config.data_bounds)
+
+    # Ensure primary square is first
+    if config.region not in needed_squares:
+        needed_squares.insert(0, config.region)
+    elif needed_squares[0] != config.region:
+        needed_squares.remove(config.region)
+        needed_squares.insert(0, config.region)
+
+    paths = []
+    for square in needed_squares:
+        path = DATA_DIR / square
+        if path.exists():
+            paths.append(path)
+
+    return paths
 
 
 def main():
@@ -3585,6 +3839,22 @@ def main():
             print(f"  indonesia, malaysia-singapore-brunei, vietnam, thailand")
             print(f"{'='*60}")
             return
+    else:
+        # Primary data exists - check for missing adjacent squares needed for rotation/shifting
+        needed_squares = get_mgrs_squares_for_bounds(config.data_bounds)
+        available_paths = get_all_data_paths(config)
+        available_squares = [str(p).replace("data/", "") for p in available_paths]
+
+        missing_squares = [sq for sq in needed_squares if sq not in available_squares]
+
+        if missing_squares:
+            print(f"\nAdditional MGRS squares needed for full coverage: {', '.join(missing_squares)}")
+            available_pbfs = get_available_country_pbfs()
+            if available_pbfs:
+                for sq in missing_squares:
+                    result = extract_single_mgrs_square(sq, available_pbfs)
+                    if result and not config.country:
+                        config.country = result
 
     # Create output directory
     config.output_path.mkdir(parents=True, exist_ok=True)
@@ -3599,13 +3869,12 @@ def main():
     dem = load_dem(config)
     print(f"  DEM: {dem.width}x{dem.height}")
 
-    # Load landcover (uses expanded bounds for rotation)
-    lc_path = config.data_path / "landcover.geojson"
-    if lc_path.exists():
-        print("  Loading landcover...")
-        try:
-            # Use on_invalid="ignore" to skip malformed geometries
-            landcover = gpd.read_file(lc_path, on_invalid="ignore")
+    # Load landcover (uses expanded bounds for rotation, from all MGRS squares)
+    print("  Loading landcover...")
+    try:
+        landcover = load_geojson_from_all_squares(config, "landcover.geojson")
+
+        if not landcover.empty:
             landcover = landcover.to_crs(GRID_CRS)
 
             # Remove any rows with null/invalid geometries
@@ -3620,10 +3889,10 @@ def main():
             )
             landcover = landcover[landcover.intersects(map_bounds)]
             print(f"  Filtered to {len(landcover)} landcover polygons in bounds")
-        except Exception as e:
-            print(f"  Warning: Error loading landcover: {e}")
+        else:
             landcover = gpd.GeoDataFrame()
-    else:
+    except Exception as e:
+        print(f"  Warning: Error loading landcover: {e}")
         landcover = gpd.GeoDataFrame()
 
     # Load roads
