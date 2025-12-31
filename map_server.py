@@ -23,34 +23,19 @@ import queue
 from pathlib import Path
 from flask import Flask, send_file, request, jsonify, Response
 
-app = Flask(__name__)
+# Import region registry for auto-discovery of available PBF files
+from region_registry import detect_region_for_coords, get_available_regions
 
-# Geofabrik region bounding boxes (min_lon, min_lat, max_lon, max_lat)
-# Used to auto-detect which regional PBF to use based on coordinates
-GEOFABRIK_REGIONS = {
-    "philippines": (116.0, 4.5, 127.0, 21.5),
-    "taiwan": (119.0, 21.5, 122.5, 26.0),
-    "japan": (122.5, 24.0, 154.0, 46.0),
-    "south-korea": (124.0, 33.0, 132.0, 39.0),
-    "indonesia": (95.0, -11.0, 141.0, 6.0),
-    "malaysia-singapore-brunei": (99.0, 0.5, 119.5, 7.5),
-    "vietnam": (102.0, 8.0, 110.0, 24.0),
-    "thailand": (97.0, 5.5, 106.0, 21.0),
-    "cambodia": (102.0, 9.5, 108.0, 15.0),
-    "laos": (100.0, 13.5, 108.0, 23.0),
-    "myanmar": (92.0, 9.5, 101.5, 28.5),
-}
+app = Flask(__name__)
 
 
 def detect_geofabrik_region(lat: float, lon: float) -> str:
     """Detect which Geofabrik region contains the given coordinates.
 
+    Uses auto-discovered regions from cached PBF files.
     Returns the region name or None if not found.
     """
-    for region, (min_lon, min_lat, max_lon, max_lat) in GEOFABRIK_REGIONS.items():
-        if min_lon <= lon <= max_lon and min_lat <= lat <= max_lat:
-            return region
-    return None
+    return detect_region_for_coords(lat, lon)
 
 # Store for generation status
 generation_status = {
@@ -86,6 +71,44 @@ def save_config():
             json.dump(config, f, indent=2)
 
         return jsonify({'success': True, 'message': 'Configuration saved'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/defaults', methods=['GET'])
+def get_defaults():
+    """Get map defaults from map_defaults.json."""
+    try:
+        defaults_path = Path(__file__).parent / 'map_defaults.json'
+        if defaults_path.exists():
+            with open(defaults_path) as f:
+                return jsonify(json.load(f))
+        else:
+            # Return empty defaults structure
+            return jsonify({
+                "grid": {"hex_size_m": 250, "grid_width": 47, "grid_height": 26},
+                "contours": {"contour_interval_m": 20, "index_contour_interval_m": 100},
+                "print": {"trim_width_in": 34.0, "trim_height_in": 22.0, "bleed_in": 0.125, "data_margin_in": 1.25},
+                "play_margins": {"top_in": 0.0, "bottom_in": 0.0, "left_in": 0.0, "right_in": 0.0},
+                "mgrs": {"grid_interval_m": 1000}
+            })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/defaults', methods=['POST'])
+def save_defaults():
+    """Save map defaults to map_defaults.json."""
+    try:
+        defaults = request.get_json()
+        if not defaults:
+            return jsonify({'error': 'No defaults provided'}), 400
+
+        defaults_path = Path(__file__).parent / 'map_defaults.json'
+        with open(defaults_path, 'w') as f:
+            json.dump(defaults, f, indent=2)
+
+        return jsonify({'success': True, 'message': 'Defaults saved. Restart may be needed for changes to take effect.'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

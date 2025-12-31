@@ -20,6 +20,7 @@ Usage:
 """
 
 import sys
+import os
 import json
 import time
 import subprocess
@@ -30,23 +31,40 @@ import mgrs
 import tempfile
 import shutil
 
+# Import region registry for auto-discovery of available PBF files
+from region_registry import (
+    get_available_regions,
+    get_region_url,
+    get_region_pbf_path,
+    get_region_display_name,
+)
+
 # === Configuration ===
 DATA_DIR = Path("data")
 GEOFABRIK_DIR = DATA_DIR / "geofabrik"
-OPENTOPOGRAPHY_API_KEY = "137877e41e9d540cf80cc3601dc2230a"
+DEFAULTS_FILE = Path("map_defaults.json")
+
+# Load shared defaults
+def _load_defaults():
+    if DEFAULTS_FILE.exists():
+        with open(DEFAULTS_FILE) as f:
+            return json.load(f)
+    return {}
+
+_defaults = _load_defaults()
+
+# API key from environment variable (more secure than hardcoding)
+# Get your own key at: https://opentopography.org/developers
+OPENTOPOGRAPHY_API_KEY = os.environ.get(
+    "OPENTOPOGRAPHY_API_KEY",
+    "137877e41e9d540cf80cc3601dc2230a"  # Fallback for backwards compatibility
+)
 OVERPASS_URL = "https://lz4.overpass-api.de/api/interpreter"
 
-# Geofabrik region URLs (add more as needed)
-GEOFABRIK_REGIONS = {
-    "philippines": "https://download.geofabrik.de/asia/philippines-latest.osm.pbf",
-    "taiwan": "https://download.geofabrik.de/asia/taiwan-latest.osm.pbf",
-    "japan": "https://download.geofabrik.de/asia/japan-latest.osm.pbf",
-    "south-korea": "https://download.geofabrik.de/asia/south-korea-latest.osm.pbf",
-    "indonesia": "https://download.geofabrik.de/asia/indonesia-latest.osm.pbf",
-    "malaysia-singapore-brunei": "https://download.geofabrik.de/asia/malaysia-singapore-brunei-latest.osm.pbf",
-    "vietnam": "https://download.geofabrik.de/asia/vietnam-latest.osm.pbf",
-    "thailand": "https://download.geofabrik.de/asia/thailand-latest.osm.pbf",
-}
+# Grid parameters (from shared config)
+HEX_SIZE_M = _defaults.get("grid", {}).get("hex_size_m", 250)
+GRID_WIDTH = _defaults.get("grid", {}).get("grid_width", 47)
+GRID_HEIGHT = _defaults.get("grid", {}).get("grid_height", 26)
 
 # Feature definitions: tag filters for osmium tags-filter
 # Format: (filename, osmium_filter)
@@ -226,20 +244,23 @@ def check_osmium_installed() -> bool:
 
 
 def download_geofabrik_pbf(region: str) -> Path:
-    """Download a Geofabrik regional PBF file if not already present."""
+    """Download a Geofabrik regional PBF file if not already present.
+
+    Uses the region registry for auto-discovery. If the region is already
+    cached, returns the path to the existing file.
+    """
     GEOFABRIK_DIR.mkdir(parents=True, exist_ok=True)
 
-    if region not in GEOFABRIK_REGIONS:
-        available = ", ".join(GEOFABRIK_REGIONS.keys())
-        raise ValueError(f"Unknown region: {region}. Available: {available}")
+    # Check if file already exists via registry
+    existing_path = get_region_pbf_path(region)
+    if existing_path and existing_path.exists():
+        print(f"  Using cached {existing_path.name}")
+        return existing_path
 
-    url = GEOFABRIK_REGIONS[region]
+    # Get URL from registry (generates URL even for unknown regions)
+    url = get_region_url(region)
     filename = f"{region}-latest.osm.pbf"
     output_file = GEOFABRIK_DIR / filename
-
-    if output_file.exists():
-        print(f"  Using cached {filename}")
-        return output_file
 
     print(f"  Downloading {filename} from Geofabrik...")
     print(f"    URL: {url}")
@@ -260,6 +281,10 @@ def download_geofabrik_pbf(region: str) -> Path:
                 print(f"\r    Downloaded: {mb:.1f} MB ({pct:.1f}%)", end="", flush=True)
 
     print(f"\n    Saved {output_file} ({downloaded / 1024 / 1024:.1f} MB)")
+
+    # Trigger registry rescan to pick up the new file
+    get_available_regions(force_rescan=True)
+
     return output_file
 
 
@@ -581,10 +606,7 @@ def get_map_config_bounds(config_path: Path) -> Optional[Tuple[float, float, flo
         if center_lon is None or center_lat is None:
             return None
 
-        # Map parameters (must match tactical_map.py)
-        HEX_SIZE_M = 250
-        GRID_WIDTH = 47
-        GRID_HEIGHT = 26
+        # Map parameters now loaded from shared config at module level
 
         # Transform to UTM to calculate proper bounds
         # Determine UTM zone from longitude
@@ -796,9 +818,9 @@ def main():
   python download_mgrs_data_osmium.py --region taiwan "51R TG"
   python download_mgrs_data_osmium.py --region taiwan "51R TG" --force
 
-Available regions:
-  philippines, taiwan, japan, south-korea, indonesia,
-  malaysia-singapore-brunei, vietnam, thailand
+Available regions are auto-discovered from cached PBF files.
+Use --list-regions to see currently available regions.
+New regions can be added by downloading PBF files to data/geofabrik/.
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -807,14 +829,24 @@ Available regions:
     parser.add_argument("--force", action="store_true",
                         help="Force re-download of all features (ignore existing files)")
     parser.add_argument("--list-regions", action="store_true",
-                        help="List available Geofabrik regions")
+                        help="List available Geofabrik regions (auto-discovered from cache)")
 
     args = parser.parse_args()
 
     if args.list_regions:
-        print("Available Geofabrik regions:")
-        for name, url in sorted(GEOFABRIK_REGIONS.items()):
-            print(f"  {name}: {url}")
+        regions = get_available_regions()
+        if regions:
+            print("Available Geofabrik regions (auto-discovered):")
+            for name, info in sorted(regions.items()):
+                bounds = info["bounds"]
+                print(f"  {name}:")
+                print(f"    Display: {info['display_name']}")
+                print(f"    Bounds:  {bounds[0]:.1f}°E to {bounds[2]:.1f}°E, {bounds[1]:.1f}°N to {bounds[3]:.1f}°N")
+                print(f"    File:    {info['pbf_file']}")
+        else:
+            print("No regions available. Download PBF files to data/geofabrik/")
+            print("Example: curl -o data/geofabrik/ukraine-latest.osm.pbf \\")
+            print("  https://download.geofabrik.de/europe/ukraine-latest.osm.pbf")
         sys.exit(0)
 
     if not args.mgrs_square:

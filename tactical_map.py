@@ -11,6 +11,7 @@ Generates US Army military-style maps with:
 import json
 import math
 import subprocess
+import sys
 import time
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -27,6 +28,9 @@ from shapely.ops import linemerge
 from pyproj import Transformer, CRS
 import svgwrite
 
+# Local utilities - region registry for auto-discovery of available PBF files
+from region_registry import get_region_display_name
+
 # Local utilities
 from map_utils import Bounds, RotationConfig, CoordinateTransformer, LayerManager, LayerZOrder
 from render_helpers import (
@@ -40,22 +44,35 @@ from render_helpers import (
 DATA_DIR = Path("data")
 OUTPUT_DIR = Path("output")
 GEOFABRIK_DIR = DATA_DIR / "geofabrik"
+DEFAULTS_FILE = Path("map_defaults.json")
 
-# Grid parameters
-HEX_SIZE_M = 250  # 250m hex (flat edge to flat edge)
-GRID_WIDTH = 47   # hexes wide
-GRID_HEIGHT = 26  # hexes tall
 
-# Contour parameters
-CONTOUR_INTERVAL = 20      # meters between contour lines
-INDEX_CONTOUR_INTERVAL = 100  # meters between index (bold) contours
+def load_map_defaults() -> dict:
+    """Load configuration from map_defaults.json if it exists."""
+    if DEFAULTS_FILE.exists():
+        with open(DEFAULTS_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+# Load defaults from config file (or use fallbacks)
+_defaults = load_map_defaults()
+
+# Grid parameters (from config or fallback)
+HEX_SIZE_M = _defaults.get("grid", {}).get("hex_size_m", 250)
+GRID_WIDTH = _defaults.get("grid", {}).get("grid_width", 47)
+GRID_HEIGHT = _defaults.get("grid", {}).get("grid_height", 26)
+
+# Contour parameters (from config or fallback)
+CONTOUR_INTERVAL = _defaults.get("contours", {}).get("contour_interval_m", 20)
+INDEX_CONTOUR_INTERVAL = _defaults.get("contours", {}).get("index_contour_interval_m", 100)
 
 # Coordinate systems
-GRID_CRS = "EPSG:32651"  # UTM zone 51N (meters) - for Philippines/Batanes region
 WGS84 = "EPSG:4326"
 
-# UTM zone - will be set dynamically based on map center location
-UTM_CRS = None  # Set by get_utm_crs() based on center coordinates
+# GRID_CRS is set dynamically based on map center location
+# Default to UTM zone 51N, but this will be updated by set_grid_crs()
+GRID_CRS = "EPSG:32651"
 
 
 def get_utm_crs(lon: float, lat: float) -> str:
@@ -68,8 +85,22 @@ def get_utm_crs(lon: float, lat: float) -> str:
     else:
         return f"EPSG:327{zone:02d}"  # Southern hemisphere
 
-# MGRS grid parameters
-MGRS_GRID_INTERVAL = 1000  # 1km grid lines for 1:50,000 scale
+
+def set_grid_crs(lon: float, lat: float) -> str:
+    """Set the global GRID_CRS based on map center coordinates.
+
+    This must be called early in the map generation process, before
+    any coordinate transformations are performed.
+
+    Returns the CRS string that was set.
+    """
+    global GRID_CRS
+    GRID_CRS = get_utm_crs(lon, lat)
+    print(f"Set GRID_CRS to {GRID_CRS} for coordinates ({lat:.4f}°N, {lon:.4f}°E)")
+    return GRID_CRS
+
+# MGRS grid parameters (from config or fallback)
+MGRS_GRID_INTERVAL = _defaults.get("mgrs", {}).get("grid_interval_m", 1000)
 
 # Terrain colors (OpenTopoMap style)
 TERRAIN_COLORS = {
@@ -137,20 +168,21 @@ MGRS_LABEL_SIZE_M = 80            # MGRS label font size in meters
 HEX_GRID_COLOR = "#5e5959"        # Grey for hex grid
 HEX_GRID_WIDTH_M = 5              # Hex line width in meters
 HEX_GRID_OPACITY = 0.5            # Hex grid opacity (50%)
+HEX_SPINE_LENGTH = 0.18           # Spine length as fraction of edge (0.18 = 18%)
 HEX_LABEL_SIZE_M = 25             # Hex label font size in meters
 HEX_MARKER_RADIUS_M = 12          # Hex center circle radius in meters
 
-# Print layout settings (fixed document dimensions)
-TRIM_WIDTH_IN = 34.0              # Trim width in inches (final printed width)
-TRIM_HEIGHT_IN = 22.0             # Trim height in inches (final printed height)
-PLAY_MARGIN_TOP_IN = 0.0          # Margin from trim to top hex row (inches)
-PLAY_MARGIN_BOTTOM_IN = 0.0       # Margin from trim to bottom hex row (inches)
-PLAY_MARGIN_LEFT_IN = 0.0         # Margin from trim to left hex points (inches)
-PLAY_MARGIN_RIGHT_IN = 0.0        # Margin from trim to right hex points (inches)
-DATA_MARGIN_IN = 1.25             # Margin outside bleed for data elements (inches)
-
-# Print bleed settings
-BLEED_INCHES = 0.125              # Standard bleed for professional printing (1/8")
+# Print layout settings (from config or fallback)
+_print = _defaults.get("print", {})
+_margins = _defaults.get("play_margins", {})
+TRIM_WIDTH_IN = _print.get("trim_width_in", 34.0)
+TRIM_HEIGHT_IN = _print.get("trim_height_in", 22.0)
+PLAY_MARGIN_TOP_IN = _margins.get("top_in", 0.0)
+PLAY_MARGIN_BOTTOM_IN = _margins.get("bottom_in", 0.0)
+PLAY_MARGIN_LEFT_IN = _margins.get("left_in", 0.0)
+PLAY_MARGIN_RIGHT_IN = _margins.get("right_in", 0.0)
+DATA_MARGIN_IN = _print.get("data_margin_in", 1.25)
+BLEED_INCHES = _print.get("bleed_in", 0.125)
 
 # Legacy margin (will be calculated dynamically based on scale)
 MARGIN_M = 300                    # Default margin around playable area in meters (recalculated)
@@ -2575,20 +2607,51 @@ def render_tactical_svg(
             stroke="none",
         ))
 
-    # Layer 7: Hex grid overlay (darker for contrast)
-    print("  Rendering hex grid...")
+    # Layer 7: Hex grid overlay - spine style (short lines at vertices)
+    # Instead of full hex outlines, draw short "spines" radiating from each vertex
+    print("  Rendering hex grid (spine style)...")
+
+    # Collect all unique vertices and their connected edges
+    # Each vertex is shared by up to 3 hexes, and has 3 edges meeting there
+    vertex_edges = {}  # vertex_key -> set of edge directions
+
     for h in hexes:
         poly = grid.hex_polygon(h.q, h.r)
-        coords = list(poly.exterior.coords)
-        svg_points = [to_svg(x, y) for x, y in coords]
+        coords = list(poly.exterior.coords)[:-1]  # Remove duplicate closing point
 
-        layer_hex_grid.add(dwg.polygon(
-            points=svg_points,
-            fill="none",
-            stroke=HEX_GRID_COLOR,
-            stroke_width=HEX_GRID_WIDTH_M,
-            stroke_opacity=HEX_GRID_OPACITY,
-        ))
+        for i, (x, y) in enumerate(coords):
+            # Round coordinates to avoid floating point key issues
+            vkey = (round(x, 3), round(y, 3))
+
+            if vkey not in vertex_edges:
+                vertex_edges[vkey] = set()
+
+            # Get the two adjacent vertices (previous and next)
+            prev_coord = coords[(i - 1) % 6]
+            next_coord = coords[(i + 1) % 6]
+
+            # Store normalized edge directions (as endpoint coordinates)
+            vertex_edges[vkey].add((round(prev_coord[0], 3), round(prev_coord[1], 3)))
+            vertex_edges[vkey].add((round(next_coord[0], 3), round(next_coord[1], 3)))
+
+    # Draw spines at each vertex
+    for (vx, vy), adjacent_vertices in vertex_edges.items():
+        svg_vx, svg_vy = to_svg(vx, vy)
+
+        for (ax, ay) in adjacent_vertices:
+            # Calculate spine endpoint (fraction of distance toward adjacent vertex)
+            spine_x = vx + (ax - vx) * HEX_SPINE_LENGTH
+            spine_y = vy + (ay - vy) * HEX_SPINE_LENGTH
+            svg_sx, svg_sy = to_svg(spine_x, spine_y)
+
+            layer_hex_grid.add(dwg.line(
+                start=(svg_vx, svg_vy),
+                end=(svg_sx, svg_sy),
+                stroke=HEX_GRID_COLOR,
+                stroke_width=HEX_GRID_WIDTH_M,
+                stroke_opacity=HEX_GRID_OPACITY,
+                stroke_linecap="round",
+            ))
 
     # Layer 7: Hex markers (center circles) and labels
     print("  Rendering hex markers and labels...")
@@ -2942,16 +3005,19 @@ def render_tactical_svg(
         font_family="monospace",
     ))
 
+    # Country and map name line
+    map_title = f"{config.country}: {config.name}" if config.country else config.name
     layer_map_data.add(dwg.text(
-        f"MGRS: {mgrs_formatted}",
+        map_title,
         insert=(left_col_x, data_block_y + DATA_LINE_HEIGHT_M),
         font_size=DATA_FONT_SIZE_M,
-        fill="#aaaaaa",
+        font_weight="bold",
+        fill="#00d4ff",  # Cyan to stand out
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
-        f"LAT: {config.center_lat:.5f}  LNG: {config.center_lon:.5f}",
+        f"MGRS: {mgrs_formatted}",
         insert=(left_col_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
         font_size=DATA_FONT_SIZE_M,
         fill="#aaaaaa",
@@ -2959,8 +3025,16 @@ def render_tactical_svg(
     ))
 
     layer_map_data.add(dwg.text(
-        f"Easting: {center_utm_e:.0f}  Northing: {center_utm_n:.0f}",
+        f"LAT: {config.center_lat:.5f}  LNG: {config.center_lon:.5f}",
         insert=(left_col_x, data_block_y + DATA_LINE_HEIGHT_M * 3),
+        font_size=DATA_FONT_SIZE_M,
+        fill="#aaaaaa",
+        font_family="monospace",
+    ))
+
+    layer_map_data.add(dwg.text(
+        f"Easting: {center_utm_e:.0f}  Northing: {center_utm_n:.0f}",
+        insert=(left_col_x, data_block_y + DATA_LINE_HEIGHT_M * 4),
         font_size=DATA_FONT_SIZE_M,
         fill="#aaaaaa",
         font_family="monospace",
@@ -3366,6 +3440,10 @@ def load_config_from_file() -> Optional[MapConfig]:
     with open(config_path) as f:
         data = json.load(f)
 
+    # IMPORTANT: Set the global GRID_CRS before creating MapConfig
+    # MapConfig.__post_init__ uses GRID_CRS for coordinate transformations
+    set_grid_crs(data["center_lon"], data["center_lat"])
+
     config = MapConfig(
         name=data.get("name", "unnamed"),
         center_lat=data["center_lat"],
@@ -3395,19 +3473,6 @@ def get_available_country_pbfs() -> List[Tuple[str, Path]]:
     # Sort by file size (try smaller files first for faster failure)
     pbfs.sort(key=lambda x: x[1].stat().st_size)
     return pbfs
-
-
-# Map Geofabrik region names to display country names
-GEOFABRIK_TO_COUNTRY = {
-    "japan": "Japan",
-    "taiwan": "Taiwan",
-    "philippines": "Philippines",
-    "south-korea": "South Korea",
-    "indonesia": "Indonesia",
-    "vietnam": "Vietnam",
-    "thailand": "Thailand",
-    "malaysia-singapore-brunei": "Malaysia",
-}
 
 
 # OSM Land Polygons - Official pre-built land/ocean polygons from OpenStreetMap
@@ -3664,7 +3729,7 @@ def extract_single_mgrs_square(mgrs_region: str, available_pbfs: list) -> str:
             with open(bounds_file) as f:
                 bounds_data = json.load(f)
                 geofabrik_region = bounds_data.get("source", {}).get("region", "")
-                return GEOFABRIK_TO_COUNTRY.get(geofabrik_region, geofabrik_region.title())
+                return get_region_display_name(geofabrik_region)
         return ""
 
     for region, pbf_path in available_pbfs:
@@ -3683,7 +3748,7 @@ def extract_single_mgrs_square(mgrs_region: str, available_pbfs: list) -> str:
             )
 
             if data_path.exists() and (data_path / "elevation.tif").exists():
-                country = GEOFABRIK_TO_COUNTRY.get(region, region.title())
+                country = get_region_display_name(region)
                 print(f"  {mgrs_region}: Extracted from {region}")
                 return country
             else:
@@ -3767,15 +3832,16 @@ def main():
     config = load_config_from_file()
 
     if config is None:
-        # Default: Taichung City center coordinates
-        print("No map_config.json found, using default configuration...")
-        config = MapConfig(
-            name="taichung",
-            center_lat=24.1477,
-            center_lon=120.6736,
-            region="taiwan",
-            rotation_deg=30,
-        )
+        print("=" * 60)
+        print("ERROR: No map_config.json found!")
+        print("=" * 60)
+        print("\nPlease use the web interface to configure your map:")
+        print("  1. Start the server: python map_server.py")
+        print("  2. Open http://localhost:8080 in your browser")
+        print("  3. Enter your map coordinates and settings")
+        print("  4. Click Generate")
+        print()
+        sys.exit(1)
 
     print("=" * 60)
     print(f"Tactical Map Generator: {config.name}")
@@ -3798,7 +3864,7 @@ def main():
                 bounds_data = json.load(f)
                 geofabrik_region = bounds_data.get("source", {}).get("region", "")
                 if geofabrik_region:
-                    config.country = GEOFABRIK_TO_COUNTRY.get(geofabrik_region, geofabrik_region.title())
+                    config.country = get_region_display_name(geofabrik_region)
                     print(f"Inferred country from data: {config.country}")
 
     if data_missing:

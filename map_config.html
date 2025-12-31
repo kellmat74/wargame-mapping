@@ -443,7 +443,7 @@
                         <li>Enter a <strong>Map Name</strong> (used for output filenames)</li>
                         <li>Set the <strong>Center Location</strong> - paste coordinates in any format:
                             <ul style="margin: 5px 0; font-size: 11px; color: #888;">
-                                <li>Decimal: 24.1477, 120.6736 (Google Maps format)</li>
+                                <li>Decimal: 49.7289, 37.5767 (Google Maps format)</li>
                                 <li>DMS: 24°08'51"N 120°40'25"E</li>
                                 <li>MGRS: 51PTT1234567890 or 51P TT 12345 67890</li>
                             </ul>
@@ -462,7 +462,7 @@
                     <ul style="margin: 0 0 15px 0; padding-left: 20px; font-size: 12px;">
                         <li>Download the country PBF once from <a href="https://download.geofabrik.de/asia.html" target="_blank" style="color: #00d4ff;">Geofabrik</a></li>
                         <li>Save to: <code style="background: #1a1a2e; padding: 2px 6px; border-radius: 3px;">data/geofabrik/{country}-latest.osm.pbf</code></li>
-                        <li>Available: japan, taiwan, philippines, south-korea, indonesia, vietnam, thailand</li>
+                        <li>Available regions auto-detected from downloaded PBF files</li>
                     </ul>
 
                     <p style="margin: 0 0 10px 0;"><strong style="color: #00d4ff;">Step 3: Find Your Output</strong></p>
@@ -499,11 +499,11 @@
             <div class="input-group">
                 <div class="input-field">
                     <label>Latitude</label>
-                    <input type="number" id="centerLat" step="0.0001" value="24.1477">
+                    <input type="number" id="centerLat" step="0.0001" value="" placeholder="Enter latitude">
                 </div>
                 <div class="input-field">
                     <label>Longitude</label>
-                    <input type="number" id="centerLon" step="0.0001" value="120.6736">
+                    <input type="number" id="centerLon" step="0.0001" value="" placeholder="Enter longitude">
                 </div>
             </div>
 
@@ -603,6 +603,107 @@
             </div>
         </div>
 
+        <!-- Map Settings (collapsible) -->
+        <div class="panel">
+            <h2 style="cursor: pointer;" onclick="toggleSettings()">
+                Map Settings <span id="settingsToggle" style="float: right; font-size: 12px;">▶</span>
+            </h2>
+            <div id="settingsContent" style="display: none;">
+                <!-- Grid Settings -->
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 10px; font-size: 12px; color: #aaa; text-transform: uppercase;">Grid</label>
+                    <div class="input-group">
+                        <div class="input-field">
+                            <label>Hex Size (m)</label>
+                            <input type="number" id="hexSizeM" step="10" value="250">
+                            <div class="region-info">Flat edge to flat edge</div>
+                        </div>
+                        <div class="input-field">
+                            <label>Grid Width (hexes)</label>
+                            <input type="number" id="gridWidth" step="1" value="47">
+                        </div>
+                        <div class="input-field">
+                            <label>Grid Height (hexes)</label>
+                            <input type="number" id="gridHeight" step="1" value="26">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Contour Settings -->
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 10px; font-size: 12px; color: #aaa; text-transform: uppercase;">Contours</label>
+                    <div class="input-group">
+                        <div class="input-field">
+                            <label>Contour Interval (m)</label>
+                            <input type="number" id="contourInterval" step="5" value="20">
+                            <div class="region-info">Regular contour spacing</div>
+                        </div>
+                        <div class="input-field">
+                            <label>Index Interval (m)</label>
+                            <input type="number" id="indexContourInterval" step="10" value="100">
+                            <div class="region-info">Bold contour spacing</div>
+                        </div>
+                        <div class="input-field">
+                            <label>MGRS Grid (m)</label>
+                            <input type="number" id="mgrsGridInterval" step="100" value="1000">
+                            <div class="region-info">Grid line interval</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Print Settings -->
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 10px; font-size: 12px; color: #aaa; text-transform: uppercase;">Print Layout (inches)</label>
+                    <div class="input-group">
+                        <div class="input-field">
+                            <label>Trim Width</label>
+                            <input type="number" id="trimWidthIn" step="0.5" value="34.0">
+                        </div>
+                        <div class="input-field">
+                            <label>Trim Height</label>
+                            <input type="number" id="trimHeightIn" step="0.5" value="22.0">
+                        </div>
+                        <div class="input-field">
+                            <label>Bleed</label>
+                            <input type="number" id="bleedIn" step="0.0625" value="0.125">
+                            <div class="region-info">Standard: 0.125 (1/8")</div>
+                        </div>
+                        <div class="input-field">
+                            <label>Data Margin</label>
+                            <input type="number" id="dataMarginIn" step="0.125" value="1.25">
+                            <div class="region-info">Outside bleed for legend</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Play Margins -->
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 10px; font-size: 12px; color: #aaa; text-transform: uppercase;">Play Margins (inches from trim)</label>
+                    <div class="input-group">
+                        <div class="input-field">
+                            <label>Top</label>
+                            <input type="number" id="playMarginTop" step="0.125" value="0.0">
+                        </div>
+                        <div class="input-field">
+                            <label>Bottom</label>
+                            <input type="number" id="playMarginBottom" step="0.125" value="0.0">
+                        </div>
+                        <div class="input-field">
+                            <label>Left</label>
+                            <input type="number" id="playMarginLeft" step="0.125" value="0.0">
+                        </div>
+                        <div class="input-field">
+                            <label>Right</label>
+                            <input type="number" id="playMarginRight" step="0.125" value="0.0">
+                        </div>
+                    </div>
+                </div>
+
+                <button class="generate-btn" onclick="saveSettings()" style="background-color: #2e7d32;">Save Settings</button>
+                <div class="region-info" style="margin-top: 10px;">Settings are saved to map_defaults.json. Server restart may be needed.</div>
+            </div>
+        </div>
+
         <!-- Current Configuration (collapsible) -->
         <div class="panel">
             <h2 style="cursor: pointer;" onclick="toggleConfig()">
@@ -645,6 +746,95 @@
             } else {
                 content.style.display = 'none';
                 toggle.textContent = '▶';
+            }
+        }
+
+        function toggleSettings() {
+            const content = document.getElementById('settingsContent');
+            const toggle = document.getElementById('settingsToggle');
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                toggle.textContent = '▼';
+                loadSettings();
+            } else {
+                content.style.display = 'none';
+                toggle.textContent = '▶';
+            }
+        }
+
+        async function loadSettings() {
+            try {
+                const response = await fetch('/api/defaults');
+                if (!response.ok) throw new Error('Failed to load settings');
+                const defaults = await response.json();
+
+                // Grid settings
+                document.getElementById('hexSizeM').value = defaults.grid?.hex_size_m ?? 250;
+                document.getElementById('gridWidth').value = defaults.grid?.grid_width ?? 47;
+                document.getElementById('gridHeight').value = defaults.grid?.grid_height ?? 26;
+
+                // Contour settings
+                document.getElementById('contourInterval').value = defaults.contours?.contour_interval_m ?? 20;
+                document.getElementById('indexContourInterval').value = defaults.contours?.index_contour_interval_m ?? 100;
+                document.getElementById('mgrsGridInterval').value = defaults.mgrs?.grid_interval_m ?? 1000;
+
+                // Print settings
+                document.getElementById('trimWidthIn').value = defaults.print?.trim_width_in ?? 34.0;
+                document.getElementById('trimHeightIn').value = defaults.print?.trim_height_in ?? 22.0;
+                document.getElementById('bleedIn').value = defaults.print?.bleed_in ?? 0.125;
+                document.getElementById('dataMarginIn').value = defaults.print?.data_margin_in ?? 1.25;
+
+                // Play margins
+                document.getElementById('playMarginTop').value = defaults.play_margins?.top_in ?? 0.0;
+                document.getElementById('playMarginBottom').value = defaults.play_margins?.bottom_in ?? 0.0;
+                document.getElementById('playMarginLeft').value = defaults.play_margins?.left_in ?? 0.0;
+                document.getElementById('playMarginRight').value = defaults.play_margins?.right_in ?? 0.0;
+            } catch (error) {
+                console.error('Error loading settings:', error);
+            }
+        }
+
+        async function saveSettings() {
+            const defaults = {
+                grid: {
+                    hex_size_m: parseFloat(document.getElementById('hexSizeM').value),
+                    grid_width: parseInt(document.getElementById('gridWidth').value),
+                    grid_height: parseInt(document.getElementById('gridHeight').value)
+                },
+                contours: {
+                    contour_interval_m: parseInt(document.getElementById('contourInterval').value),
+                    index_contour_interval_m: parseInt(document.getElementById('indexContourInterval').value)
+                },
+                print: {
+                    trim_width_in: parseFloat(document.getElementById('trimWidthIn').value),
+                    trim_height_in: parseFloat(document.getElementById('trimHeightIn').value),
+                    bleed_in: parseFloat(document.getElementById('bleedIn').value),
+                    data_margin_in: parseFloat(document.getElementById('dataMarginIn').value)
+                },
+                play_margins: {
+                    top_in: parseFloat(document.getElementById('playMarginTop').value),
+                    bottom_in: parseFloat(document.getElementById('playMarginBottom').value),
+                    left_in: parseFloat(document.getElementById('playMarginLeft').value),
+                    right_in: parseFloat(document.getElementById('playMarginRight').value)
+                },
+                mgrs: {
+                    grid_interval_m: parseInt(document.getElementById('mgrsGridInterval').value)
+                }
+            };
+
+            try {
+                const response = await fetch('/api/defaults', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(defaults)
+                });
+
+                if (!response.ok) throw new Error('Failed to save settings');
+                const result = await response.json();
+                alert(result.message || 'Settings saved successfully!');
+            } catch (error) {
+                console.error('Error saving settings:', error);
+                alert('Error saving settings: ' + error.message);
             }
         }
 
@@ -1023,11 +1213,11 @@
         // ============================================
 
         const state = {
-            centerLat: 24.1477,
-            centerLon: 120.6736,
+            centerLat: null,  // User must enter coordinates
+            centerLon: null,
             bearingAtTop: 0,    // What compass bearing points to top of map (0=North, 90=East, etc.)
             region: '', // Auto-detect by default
-            mapName: 'tactical_map',
+            mapName: '',  // User should provide a name
             shiftNorth: 0,      // Geographic shift tracking (for display)
             shiftEast: 0,
             mapShiftUp: 0,      // Map-relative shift tracking (for notes)
@@ -1049,12 +1239,10 @@
             return -bearing;  // Simple: if 60° at top, rotate map -60°
         }
 
-        // Known available regions (will be populated)
-        // In a real app, this could be loaded from a server or local file
+        // Known available regions - populated dynamically from downloaded PBF files
+        // Will be loaded from server or can be expanded as data is downloaded
         const KNOWN_REGIONS = [
-            { path: '51R/TG', name: 'Taichung Area' },
-            { path: '51R/UH', name: 'Loudong/Yilan Area' },
-            { path: 'taiwan', name: 'Taiwan (Legacy)' },
+            // Regions are auto-discovered from data/geofabrik/*.osm.pbf files
         ];
 
         // Approximate meters per degree
@@ -1066,13 +1254,22 @@
         // ============================================
 
         function updateMGRSDisplay() {
+            const container = document.getElementById('mgrsSquares');
+
+            // Check for valid coordinates before calculating MGRS
+            if (state.centerLat === null || state.centerLon === null ||
+                isNaN(state.centerLat) || isNaN(state.centerLon)) {
+                container.innerHTML = '<div style="color: #888; font-style: italic;">Enter coordinates to see required MGRS squares</div>';
+                state.requiredSquares = [];
+                state.autoRegion = '';
+                return;
+            }
+
             state.requiredSquares = getRequiredMGRSSquares(
                 state.centerLat,
                 state.centerLon,
                 bearingToRotation(state.bearingAtTop)
             );
-
-            const container = document.getElementById('mgrsSquares');
 
             // Initial render without status (will update async)
             renderMGRSSquares(container, {});
@@ -1148,6 +1345,10 @@
             const display = document.getElementById('configDisplay');
             const effectiveRegion = state.region || state.autoRegion || 'auto-detect';
 
+            // Check for valid coordinates
+            const hasCoords = state.centerLat !== null && state.centerLon !== null &&
+                              !isNaN(state.centerLat) && !isNaN(state.centerLon);
+
             // Show map-relative shift info
             const shiftInfo = (state.mapShiftUp !== 0 || state.mapShiftRight !== 0)
                 ? `\n<span class="label">Position Adjusted:</span> <span class="value">${formatShift(state.mapShiftUp, '↑', '↓')}, ${formatShift(state.mapShiftRight, '→', '←')}</span>`
@@ -1157,11 +1358,15 @@
                 ? '0° (North up)'
                 : `${state.bearingAtTop}° (${bearingToDirection(state.bearingAtTop)} at top)`;
 
+            const centerDisplay = hasCoords
+                ? `${state.centerLat.toFixed(6)}&deg;N, ${state.centerLon.toFixed(6)}&deg;E`
+                : '<span style="color: #888; font-style: italic;">Not set - enter coordinates above</span>';
+
             display.innerHTML = `
-<span class="label">Center:</span> <span class="value coords">${state.centerLat.toFixed(6)}&deg;N, ${state.centerLon.toFixed(6)}&deg;E</span>
+<span class="label">Center:</span> <span class="value coords">${centerDisplay}</span>
 <span class="label">Bearing at Top:</span> <span class="value">${bearingDisplay}</span>
 <span class="label">Region:</span> <span class="value">${effectiveRegion}</span>
-<span class="label">Map Name:</span> <span class="value">${state.mapName}</span>${shiftInfo}
+<span class="label">Map Name:</span> <span class="value">${state.mapName || '<span style="color: #888;">Not set</span>'}</span>${shiftInfo}
             `.trim();
         }
 
@@ -1181,6 +1386,13 @@
         }
 
         function shift(direction) {
+            // Check for valid coordinates before shifting
+            if (state.centerLat === null || state.centerLon === null ||
+                isNaN(state.centerLat) || isNaN(state.centerLon)) {
+                showStatus('Enter coordinates before adjusting position', 'warning');
+                return;
+            }
+
             const distance = getShiftDistance();
 
             // Calculate bearing based on map-relative direction
@@ -1237,6 +1449,13 @@
         }
 
         function saveConfig() {
+            // Check for valid coordinates
+            if (state.centerLat === null || state.centerLon === null ||
+                isNaN(state.centerLat) || isNaN(state.centerLon)) {
+                showStatus('Please enter valid coordinates first.', 'warning');
+                return;
+            }
+
             const effectiveRegion = state.region || state.autoRegion;
 
             if (!effectiveRegion) {
@@ -1314,20 +1533,20 @@ config = MapConfig(
         }
 
         function resetToDefaults() {
-            state.centerLat = 24.1477;
-            state.centerLon = 120.6736;
+            state.centerLat = null;
+            state.centerLon = null;
             state.bearingAtTop = 0;
             state.region = '';
             state.autoRegion = '';
-            state.mapName = 'tactical_map';
+            state.mapName = '';
             state.shiftNorth = 0;
             state.shiftEast = 0;
             state.mapShiftUp = 0;
             state.mapShiftRight = 0;
 
             document.getElementById('coordPaste').value = '';
-            document.getElementById('centerLat').value = state.centerLat;
-            document.getElementById('centerLon').value = state.centerLon;
+            document.getElementById('centerLat').value = '';
+            document.getElementById('centerLon').value = '';
             document.getElementById('rotationSlider').value = state.bearingAtTop;
             document.getElementById('rotationValue').textContent = state.bearingAtTop;
             document.getElementById('rotationDirection').textContent = '(North)';
@@ -1401,6 +1620,13 @@ config = MapConfig(
         function generateMap() {
             if (!serverAvailable) {
                 showStatus('Server not running. Start with: python map_server.py', 'warning');
+                return;
+            }
+
+            // Check for valid coordinates
+            if (state.centerLat === null || state.centerLon === null ||
+                isNaN(state.centerLat) || isNaN(state.centerLon)) {
+                showStatus('Please enter valid coordinates first.', 'warning');
                 return;
             }
 
