@@ -3114,8 +3114,8 @@ def render_tactical_svg(
     if bearing_at_top < 0:
         bearing_at_top += 360
 
-    # Small upward arrow and heading text above compass
-    arrow_y = compass_cy - circle_radius - DATA_FONT_SIZE_M * 2.5
+    # Small upward arrow with heading text below it, above compass
+    arrow_y = compass_cy - circle_radius - DATA_FONT_SIZE_M * 3
     layer_compass.add(dwg.text(
         "↑",
         insert=(compass_cx, arrow_y),
@@ -3126,7 +3126,7 @@ def render_tactical_svg(
     ))
     layer_compass.add(dwg.text(
         f"Top: {bearing_at_top:.0f}°",
-        insert=(compass_cx, arrow_y - DATA_FONT_SIZE_M * 1.2),
+        insert=(compass_cx, arrow_y + DATA_FONT_SIZE_M * 1.0),
         text_anchor="middle",
         font_size=DATA_FONT_SIZE_M * 0.8,
         fill="#888888",
