@@ -425,11 +425,45 @@
             color: #fff;
             font-size: 14px;
         }
+
+        /* Navigation tabs */
+        .nav-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .nav-tab {
+            padding: 10px 20px;
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            color: #aaa;
+            text-decoration: none;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .nav-tab:hover {
+            border-color: #00d4ff;
+            color: #fff;
+        }
+
+        .nav-tab.active {
+            background: #0f3460;
+            color: #00d4ff;
+            border-color: #00d4ff;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Tactical Map Configuration</h1>
+        <h1>Wargame Map Generator</h1>
+
+        <div class="nav-tabs">
+            <a href="/" class="nav-tab active">Detailed Map</a>
+            <a href="/game-map" class="nav-tab">Game Map Conversion</a>
+        </div>
 
         <!-- Instructions -->
         <div class="panel" style="background: #0d2137; border-color: #00d4ff;">

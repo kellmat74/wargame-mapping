@@ -225,13 +225,82 @@ cairosvg  # for PDF export (requires cairo system library)
 
 Install cairo on macOS: `brew install cairo`
 
+## Game Map Converter (December 2025)
+
+### Overview
+Created a two-stage pipeline:
+1. **Stage 1**: Detailed tactical map generation (existing `tactical_map.py`)
+2. **Stage 2**: Game map conversion (`game_map_converter.py`) - simplifies maps for gameplay
+
+### Game Map Features
+- Elevation-based terrain tinting (darker at higher elevations)
+- Hillside shading bands along elevation transitions
+- Maroon border frame (DA PrePRESS style)
+- Simplified hex labels (rows 1, 5, 10, 15, 20, 25 only)
+- Hidden detail layers (paths, powerlines, tree rows)
+- Output: SVG, PNG, PDF
+
+### Critical SVG Structure Discovery
+The detailed SVG has a specific structure that must be understood for proper overlay insertion:
+
+```
+Master_Content/
+├── Rotated_Content/          <- HAS rotation transform
+│   ├── Terrain_Open
+│   ├── Terrain_Forest
+│   ├── Roads
+│   └── ... (all terrain/feature layers)
+├── Hex_Grid                   <- NO rotation (screen coordinates)
+├── Hex_Markers                <- NO rotation (screen coordinates)
+└── Hex_Labels
+```
+
+**Key insight**: `Hex_Grid` and `Hex_Markers` are OUTSIDE `Rotated_Content`. They use screen coordinates with no rotation transform applied. When extracting hex positions from `Hex_Markers` circles, the coordinates are already in final screen space.
+
+**Overlay insertion**: Game overlays must be inserted as siblings of `Hex_Grid` (inside `Master_Content` but outside `Rotated_Content`) to avoid incorrect rotation being applied.
+
+### Relative Elevation Bands
+Changed from absolute elevation bands to relative bands based on each map's terrain:
+
+**Old (absolute)**:
+- Band 0: 0-100m, Band 1: 100-500m, etc.
+- Problem: Flat maps (e.g., 0-184m) had all hexes in Band 0
+
+**New (relative)**:
+- Base = map's minimum elevation (no tint)
+- 100m intervals from base
+- Up to 6 bands maximum
+
+| Band | Elevation Above Base | Tint Opacity |
+|------|---------------------|--------------|
+| 0 | 0-100m | 0% |
+| 1 | 100-200m | 6% |
+| 2 | 200-300m | 12% |
+| 3 | 300-400m | 18% |
+| 4 | 400-500m | 24% |
+| 5 | 500-600m | 30% |
+| 6 | 600m+ | 36% |
+
+### Diagnostic Function
+Added `diagnose_hex_alignment()` to trace:
+1. Hex_Markers circle positions (extracted centers)
+2. Hex_Grid line positions (actual grid vertices)
+3. Generated overlay polygon vertices
+4. SVG structure showing where groups sit in hierarchy
+
+### Known Issues (Pending)
+- Elevation overlays affect z-order of roads/buildings (they appear under overlays)
+- Road/bridge connections sometimes missing in detail maps
+
 ## Future Improvements
 
 - [ ] Add river rendering with proper styling
 - [ ] Add city/town labels
 - [ ] Add airfield and port markers
-- [ ] Implement elevation bands for hex data
+- [x] Implement elevation bands for hex data
 - [ ] Add legend and scale bar
 - [ ] Support for different hex sizes
 - [ ] Command-line interface for map generation
 - [ ] Batch generation of adjacent map sheets
+- [ ] Fix overlay z-order so roads/buildings render above elevation tinting
+- [ ] Fix missing road/bridge connections in detail maps

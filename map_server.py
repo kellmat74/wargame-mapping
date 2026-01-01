@@ -397,6 +397,200 @@ def check_data():
         return jsonify({'error': str(e)}), 500
 
 
+# === Game Map Conversion Routes ===
+
+# Store for game map conversion status (separate from tactical map generation)
+game_map_status = {
+    'running': False,
+    'output': [],
+    'error': None,
+    'complete': False
+}
+game_map_lock = threading.Lock()
+game_map_queue = queue.Queue()
+
+
+@app.route('/game-map')
+def game_map_page():
+    """Serve the game map conversion page."""
+    return send_file('game_map_config.html')
+
+
+@app.route('/api/detailed-maps')
+def list_detailed_maps():
+    """List available detailed maps for conversion."""
+    try:
+        output_dir = Path(__file__).parent / 'output'
+        maps = []
+
+        if output_dir.exists():
+            # Scan for map folders with hexdata.json
+            for country_dir in output_dir.iterdir():
+                if country_dir.is_dir():
+                    for map_dir in country_dir.iterdir():
+                        if map_dir.is_dir():
+                            # Check for versioned folders (timestamp format)
+                            for version_dir in map_dir.iterdir():
+                                if version_dir.is_dir():
+                                    hexdata = list(version_dir.glob('*_hexdata.json'))
+                                    svg = list(version_dir.glob('*_tactical.svg'))
+                                    if hexdata and svg:
+                                        # Load metadata
+                                        with open(hexdata[0]) as f:
+                                            metadata = json.load(f).get('metadata', {})
+
+                                        maps.append({
+                                            'path': str(version_dir),
+                                            'country': country_dir.name,
+                                            'name': map_dir.name,
+                                            'version': version_dir.name,
+                                            'center_lat': metadata.get('center_lat'),
+                                            'center_lon': metadata.get('center_lon'),
+                                            'has_game_map': (version_dir / 'game_map').exists()
+                                        })
+
+                            # Also check map_dir directly (for older maps without version folders)
+                            hexdata = list(map_dir.glob('*_hexdata.json'))
+                            svg = list(map_dir.glob('*_tactical.svg'))
+                            if hexdata and svg:
+                                with open(hexdata[0]) as f:
+                                    metadata = json.load(f).get('metadata', {})
+
+                                maps.append({
+                                    'path': str(map_dir),
+                                    'country': country_dir.name,
+                                    'name': map_dir.name,
+                                    'version': None,
+                                    'center_lat': metadata.get('center_lat'),
+                                    'center_lon': metadata.get('center_lon'),
+                                    'has_game_map': (map_dir / 'game_map').exists()
+                                })
+
+        return jsonify({'maps': maps})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/convert-game-map', methods=['POST'])
+def convert_game_map():
+    """Start game map conversion for the specified detailed map."""
+    global game_map_status
+
+    try:
+        config = request.get_json()
+        map_path = config.get('map_path')
+
+        if not map_path:
+            return jsonify({'error': 'No map path specified'}), 400
+
+        # Check if already running
+        with game_map_lock:
+            if game_map_status['running']:
+                return jsonify({'error': 'Conversion already in progress'}), 400
+
+            # Reset status
+            game_map_status = {
+                'running': True,
+                'output': [],
+                'error': None,
+                'complete': False
+            }
+
+        # Clear the queue
+        while not game_map_queue.empty():
+            try:
+                game_map_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        # Start conversion in background thread
+        def run_conversion():
+            try:
+                from game_map_converter import convert_to_game_map
+
+                # Redirect print output to queue
+                import io
+                import contextlib
+
+                class QueueWriter(io.StringIO):
+                    def write(self, s):
+                        if s.strip():
+                            game_map_queue.put(s.rstrip())
+                        return len(s)
+
+                writer = QueueWriter()
+                with contextlib.redirect_stdout(writer):
+                    convert_config = {
+                        'terrain_style': config.get('terrain_style', 'auto'),
+                        'elevation_intensity': config.get('elevation_intensity', 1.0),
+                        'label_rows': config.get('label_rows', [1, 5, 10, 15, 20, 25]),
+                    }
+                    convert_to_game_map(Path(map_path), convert_config)
+
+                with game_map_lock:
+                    game_map_status['running'] = False
+                    game_map_status['complete'] = True
+                game_map_queue.put(None)  # Signal completion
+
+            except Exception as e:
+                with game_map_lock:
+                    game_map_status['running'] = False
+                    game_map_status['error'] = str(e)
+                    game_map_status['complete'] = True
+                game_map_queue.put(None)
+
+        thread = threading.Thread(target=run_conversion)
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({'success': True, 'message': 'Conversion started'})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/game-map-progress')
+def game_map_progress_stream():
+    """Stream game map conversion progress via Server-Sent Events."""
+    def generate():
+        while True:
+            try:
+                line = game_map_queue.get(timeout=30)
+                if line is None:
+                    # Conversion complete
+                    with game_map_lock:
+                        if game_map_status['error']:
+                            yield f"data: {json.dumps({'type': 'error', 'message': game_map_status['error']})}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'type': 'complete', 'message': 'Game map conversion complete!'})}\n\n"
+                    break
+                else:
+                    yield f"data: {json.dumps({'type': 'output', 'message': line})}\n\n"
+            except queue.Empty:
+                # Send keepalive
+                yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
+
+                # Check if conversion is still running
+                with game_map_lock:
+                    if not game_map_status['running'] and game_map_status['complete']:
+                        break
+
+    return Response(generate(), mimetype='text/event-stream')
+
+
+@app.route('/api/game-map-status')
+def get_game_map_status():
+    """Get current game map conversion status."""
+    with game_map_lock:
+        return jsonify({
+            'running': game_map_status['running'],
+            'complete': game_map_status['complete'],
+            'error': game_map_status['error'],
+            'output_lines': len(game_map_status['output'])
+        })
+
+
 @app.route('/api/shutdown', methods=['POST'])
 def shutdown():
     """Shut down the server and any running subprocesses."""

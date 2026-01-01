@@ -10,9 +10,11 @@ Generates US Army military-style maps with:
 
 import json
 import math
+import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Tuple, List, Optional
@@ -120,11 +122,32 @@ TERRAIN_OUTLINES = {
     "farmland": ("#8b4513", 1),   # Brown outline, 1m width
 }
 
+# Elevation bands for game map conversion
+# Each tuple: (min_elevation, max_elevation, band_number, label)
+ELEVATION_BANDS = [
+    (0, 100, 0, "lowland"),
+    (100, 500, 1, "hills"),
+    (500, 1000, 2, "highlands"),
+    (1000, 2000, 3, "mountains"),
+    (2000, 10000, 4, "high_mountains"),
+]
+
+
+def get_elevation_band(elevation: float) -> int:
+    """Get elevation band number (0-4) for a given elevation in meters."""
+    for min_e, max_e, band, _ in ELEVATION_BANDS:
+        if min_e <= elevation < max_e:
+            return band
+    return 4  # Default to highest band for very high elevations
+
+
 # Line styles - all widths in METERS (1 SVG unit = 1 meter)
-CONTOUR_COLOR = "#8b4513"         # Brown
-INDEX_CONTOUR_COLOR = "#654321"   # Darker brown
-CONTOUR_WIDTH_M = 2               # Regular contour width in meters
-INDEX_CONTOUR_WIDTH_M = 5         # Index contour width in meters
+# Contours are subtle/aesthetic - for military map feel without being too prominent
+CONTOUR_COLOR = "#A08060"         # Muted tan-brown (more subtle)
+INDEX_CONTOUR_COLOR = "#8B7355"   # Slightly darker tan-brown
+CONTOUR_WIDTH_M = 1.5             # Regular contour width in meters (thinner)
+INDEX_CONTOUR_WIDTH_M = 3         # Index contour width in meters (thinner)
+CONTOUR_OPACITY = 0.6             # Contour line opacity (more subtle)
 CONTOUR_LABEL_INTERVAL_M = 1000   # Distance between elevation labels on index contours
 CONTOUR_LABEL_SIZE_M = 25         # Contour label font size (same as hex labels)
 
@@ -304,6 +327,7 @@ class MapConfig:
     region: str  # e.g., "51R/TG" or "51R TG" - determines which data folder to use
     country: str = ""  # e.g., "Japan", "Taiwan", "Philippines" - for output folder organization
     rotation_deg: float = 0  # Map rotation in degrees (positive = clockwise)
+    timestamp: str = ""  # Version timestamp for output folder (YYYY-MM-DD_HH-MM)
 
     # Computed values (set by calculate_bounds)
     center_x: float = 0
@@ -326,6 +350,9 @@ class MapConfig:
         self.calculate_bounds()
         # Normalize region path (handle "51R TG" -> "51R/TG")
         self.region = self._normalize_region_path(self.region)
+        # Generate timestamp for versioned output folder if not provided
+        if not self.timestamp:
+            self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
 
     def _normalize_region_path(self, region: str) -> str:
         """
@@ -461,9 +488,10 @@ class MapConfig:
 
     @property
     def output_path(self) -> Path:
+        """Output path includes timestamp for versioned folders."""
         if self.country:
-            return OUTPUT_DIR / self.country / self.name
-        return OUTPUT_DIR / self.name
+            return OUTPUT_DIR / self.country / self.name / self.timestamp
+        return OUTPUT_DIR / self.name / self.timestamp
 
     @property
     def map_bounds(self) -> Bounds:
@@ -970,6 +998,72 @@ def merge_road_segments(roads: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     merged_gdf = gpd.GeoDataFrame(merged_rows, crs=roads.crs)
 
     print(f"    Merged {original_count} segments → {len(merged_gdf)} contiguous paths")
+
+    return merged_gdf
+
+
+def merge_stream_segments(streams: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Merge connected stream segments to reduce fragment count.
+
+    Uses shapely's linemerge to combine LineStrings that share endpoints,
+    resulting in fewer, longer stream paths that render more cleanly.
+    """
+    if streams.empty:
+        return streams
+
+    # Filter to only LineString and MultiLineString geometries
+    line_mask = streams.geometry.apply(
+        lambda g: g is not None and g.geom_type in ('LineString', 'MultiLineString')
+    )
+    streams_lines = streams[line_mask].copy()
+
+    if streams_lines.empty:
+        print("    No LineString geometries to merge")
+        return streams
+
+    original_count = len(streams_lines)
+
+    # Collect all geometries for merging
+    geometries = []
+    for geom in streams_lines.geometry:
+        if geom.geom_type == 'MultiLineString':
+            geometries.extend(list(geom.geoms))
+        else:
+            geometries.append(geom)
+
+    if not geometries:
+        return streams
+
+    # Use linemerge to combine connected segments
+    try:
+        merged = linemerge(geometries)
+    except Exception as e:
+        print(f"    Warning: Could not merge streams: {e}")
+        return streams
+
+    # Extract individual LineStrings from the result
+    if merged.is_empty:
+        return streams
+    elif merged.geom_type == 'LineString':
+        result_geoms = [merged]
+    elif merged.geom_type == 'MultiLineString':
+        result_geoms = list(merged.geoms)
+    else:
+        return streams
+
+    # Create new GeoDataFrame with merged streams
+    # Copy attributes from first row as template
+    template_row = streams_lines.iloc[0].to_dict()
+    merged_rows = []
+    for geom in result_geoms:
+        row = template_row.copy()
+        row['geometry'] = geom
+        merged_rows.append(row)
+
+    merged_gdf = gpd.GeoDataFrame(merged_rows, crs=streams.crs)
+
+    print(f"    Merged {original_count} stream segments → {len(merged_gdf)} contiguous paths")
 
     return merged_gdf
 
@@ -2434,6 +2528,7 @@ def render_tactical_svg(
                 points=svg_points,
                 stroke=INDEX_CONTOUR_COLOR if is_index else CONTOUR_COLOR,
                 stroke_width=INDEX_CONTOUR_WIDTH_M if is_index else CONTOUR_WIDTH_M,
+                stroke_opacity=CONTOUR_OPACITY,
                 fill="none",
             ))
 
@@ -2477,6 +2572,7 @@ def render_tactical_svg(
                         text_anchor="middle",
                         font_size=CONTOUR_LABEL_SIZE_M,
                         fill=INDEX_CONTOUR_COLOR,
+                        fill_opacity=CONTOUR_OPACITY,
                         font_family="sans-serif",
                         dominant_baseline="middle",
                     )
@@ -3954,6 +4050,8 @@ def main():
     # Load enhanced features (optional - won't fail if files don't exist)
     print("Loading enhanced features...")
     streams = load_optional_features(config, "streams.geojson", "streams")
+    if streams is not None and not streams.empty:
+        streams = merge_stream_segments(streams)
     paths = load_optional_features(config, "paths.geojson", "paths")
     barriers = load_optional_features(config, "barriers.geojson", "barriers")
     powerlines = load_optional_features(config, "powerlines.geojson", "powerlines")
@@ -4059,12 +4157,16 @@ def main():
             "hex_size_m": HEX_SIZE_M,
             "grid_width": GRID_WIDTH,
             "grid_height": GRID_HEIGHT,
+            "timestamp": config.timestamp,
+            "country": config.country,
+            "region": config.region,
         },
         "hexes": [
             {
                 "coord": [h.q, h.r],
                 "terrain": h.terrain,
                 "elevation": h.elevation_avg,
+                "elevation_band": get_elevation_band(h.elevation_avg),
             }
             for h in hexes
         ],
@@ -4072,6 +4174,13 @@ def main():
     with open(json_path, "w") as f:
         json.dump(hex_data, f, indent=2)
     print(f"  Saved hex data to {json_path}")
+
+    # Copy map_config.json to output folder for reproducibility
+    config_source = Path("map_config.json")
+    if config_source.exists():
+        config_dest = config.output_path / "map_config.json"
+        shutil.copy2(config_source, config_dest)
+        print(f"  Saved config copy to {config_dest}")
 
     dem.close()
 
