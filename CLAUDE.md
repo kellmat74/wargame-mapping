@@ -17,6 +17,7 @@ A tactical hex-based wargame map generator that creates US Army military-style m
 | File | Purpose |
 |------|---------|
 | `tactical_map.py` | Main map generator (~4000 lines) - rendering pipeline, terrain classification, SVG output |
+| `game_map_converter.py` | Converts detail maps to game-ready maps with elevation overlays and simplified labels |
 | `hexgrid.py` | Hex grid geometry - axial coordinates, polygon generation |
 | `map_server.py` | Flask web server for configuration UI |
 | `map_config.html` | Web-based map configuration interface |
@@ -51,11 +52,32 @@ tactical_map.py:
     5. Generate contours from DEM
     6. Render SVG layers (bottom to top)
     ↓
-output/{region}/{name}/:
-    - {name}.svg
+output/{country}/{name}/{timestamp}_{version}/:
+    - {name}_tactical.svg
     - {name}_hexdata.json
-    - reference_tiles/
+    - map_config.json
+    - game_map/              # Created by game_map_converter.py
+        - {name}_game.svg
+        - {name}_game.png
+        - {name}_game.pdf
 ```
+
+### Game Map Conversion
+
+The `game_map_converter.py` transforms detail maps into game-ready maps:
+- Applies terrain color palette (temperate/arid)
+- Adds elevation tinting (darker at higher elevations)
+- Adds hillside shading (edge bands where elevation drops)
+- Maroon border frame
+- Simplified hex labels (rows 1, 5, 10, 15, 20, 25 only)
+
+**Important (v1.1.0+):** Elevation overlays are now pre-generated during detail map creation in `tactical_map.py` with `visibility="hidden"`. The game converter just unhides them. This ensures overlays align correctly on rotated maps.
+
+### Versioning
+
+Output folders include version: `{timestamp}_{version}` (e.g., `2026-01-01_15-17_v1.1.0`)
+
+Current version: **v1.1.0** - See `VERSION` constant in `tactical_map.py`
 
 ## Gathering Context from Previous Sessions
 
@@ -179,6 +201,30 @@ Data is organized by MGRS square: `data/{zone}/{square}/`
 - Check UTM zone calculation in `get_utm_epsg()`
 - Rotation math is in `RotationConfig` class
 
+## SVG Structure for Rotated Maps
+
+For maps with rotation, the SVG structure is critical for correct alignment:
+
+```
+Master_Content
+├── Rotated_Reference (transform="rotate(...)")
+│   └── Reference_Tiles (hidden)
+├── Rotated_Content (transform="rotate(...)")
+│   ├── Terrain layers (water, forest, urban, etc.)
+│   ├── Contours
+│   ├── Game_Elevation_Overlay (hidden, revealed by game converter)
+│   ├── Game_Hillside_Shading (hidden, revealed by game converter)
+│   ├── Roads, buildings, etc.
+│   └── MGRS_Grid
+├── Out_Of_Play_Frame (unrotated - clips rotated content)
+├── Hex_Grid (unrotated - stays axis-aligned)
+├── Hex_Markers (unrotated)
+├── Hex_Labels (unrotated)
+└── MGRS_Labels (unrotated)
+```
+
+**Key insight:** Game overlays MUST be inside `Rotated_Content` to align with terrain. The hex grid stays unrotated so labels remain readable.
+
 ## Known Issues / Limitations
 
 - SVG pattern fills don't render in Affinity Designer (solid fills used instead)
@@ -186,6 +232,10 @@ Data is organized by MGRS square: `data/{zone}/{square}/`
 - Progress doesn't persist after page refresh
 - Large maps may need multiple MGRS square downloads
 - Maps spanning UTM zones may have edge distortion
+
+## Resolved Issues
+
+- **v1.1.0:** Fixed overlay alignment on rotated maps. Overlays are now generated during detail map creation (inside `Rotated_Content`) rather than during game conversion.
 
 ## Testing
 
