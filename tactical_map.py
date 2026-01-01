@@ -48,6 +48,9 @@ OUTPUT_DIR = Path("output")
 GEOFABRIK_DIR = DATA_DIR / "geofabrik"
 DEFAULTS_FILE = Path("map_defaults.json")
 
+# === Version ===
+VERSION = "v1.1.0"
+
 
 def load_map_defaults() -> dict:
     """Load configuration from map_defaults.json if it exists."""
@@ -303,6 +306,32 @@ TOWER_COLOR = "#333333"           # Dark grey for towers
 FUEL_COLOR = "#cc6600"            # Orange for fuel facilities
 FUEL_MARKER_SIZE_M = 8            # Fuel marker size
 
+# === Game Overlay Settings (for hidden layers revealed in game map conversion) ===
+# Elevation tint darkness per band (0-6)
+# Bands are RELATIVE to map's minimum elevation, 100m intervals
+ELEVATION_TINT_OPACITY = {
+    0: 0.0,    # Base elevation - no darkening
+    1: 0.10,   # +100m - 10% darker
+    2: 0.20,   # +200m - 20% darker
+    3: 0.30,   # +300m - 30% darker
+    4: 0.40,   # +400m - 40% darker
+    5: 0.50,   # +500m - 50% darker
+    6: 0.60,   # +600m+ - 60% darker (max)
+}
+
+ELEVATION_BAND_INTERVAL = 100  # meters per elevation band
+ELEVATION_BAND_MAX = 6         # maximum band number
+
+# Hillside shading colors (darker versions of terrain base colors)
+HILLSIDE_COLORS = {
+    'temperate': '#6B7A60',  # Darker sage green for temperate terrain
+    'arid': '#9A8B70',       # Darker tan/khaki for arid terrain
+}
+
+# Mapping from neighbor direction to geometric edge index
+# (for hillside shading band placement)
+NEIGHBOR_DIR_TO_EDGE = [4, 5, 0, 1, 2, 3]
+
 
 @dataclass
 class TacticalHex:
@@ -350,9 +379,9 @@ class MapConfig:
         self.calculate_bounds()
         # Normalize region path (handle "51R TG" -> "51R/TG")
         self.region = self._normalize_region_path(self.region)
-        # Generate timestamp for versioned output folder if not provided
+        # Generate timestamp_version for versioned output folder if not provided
         if not self.timestamp:
-            self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+            self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M") + f"_{VERSION}"
 
     def _normalize_region_path(self, region: str) -> str:
         """
@@ -909,6 +938,173 @@ def classify_terrain(
 
     print(f"  Classified {len(hexes)} hexes")
     return hexes
+
+
+def get_hex_neighbors(q: int, r: int) -> list:
+    """
+    Get the 6 neighboring hex coordinates for flat-top hex grid.
+
+    Returns neighbors by DIRECTION (0-5 clockwise from top).
+    """
+    if q % 2 == 0:
+        return [
+            (q, r - 1),      # Dir 0: top
+            (q + 1, r - 1),  # Dir 1: top-right
+            (q + 1, r),      # Dir 2: bottom-right
+            (q, r + 1),      # Dir 3: bottom
+            (q - 1, r),      # Dir 4: bottom-left
+            (q - 1, r - 1),  # Dir 5: top-left
+        ]
+    else:
+        return [
+            (q, r - 1),      # Dir 0: top
+            (q + 1, r),      # Dir 1: top-right
+            (q + 1, r + 1),  # Dir 2: bottom-right
+            (q, r + 1),      # Dir 3: bottom
+            (q - 1, r + 1),  # Dir 4: bottom-left
+            (q - 1, r),      # Dir 5: top-left
+        ]
+
+
+def generate_game_overlays(
+    hexes: list,
+    grid,
+    dwg,
+    to_svg,
+    hex_size_m: float = 250,
+    terrain_style: str = 'temperate',
+    intensity: float = 1.0
+):
+    """
+    Generate hidden elevation overlay and hillside shading layers.
+
+    These layers use the same coordinate system as terrain layers,
+    so they align correctly regardless of map rotation. They are hidden
+    by default and revealed during game map conversion.
+
+    Args:
+        hexes: List of TacticalHex objects with elevation_avg
+        grid: TacticalHexGrid for coordinate conversion
+        dwg: svgwrite.Drawing object
+        to_svg: Function to convert world coordinates to SVG coordinates
+        hex_size_m: Hex size in meters (flat edge to flat edge)
+        terrain_style: 'temperate' or 'arid' for hillside color
+        intensity: Opacity multiplier (default 1.0)
+
+    Returns:
+        Tuple of (elevation_overlay_group, hillside_shading_group)
+    """
+    # Calculate elevation bands relative to map minimum
+    elevations = [h.elevation_avg for h in hexes]
+    min_elev = min(elevations) if elevations else 0
+    max_elev = max(elevations) if elevations else 0
+
+    print(f"  Game overlays - Elevation range: {min_elev:.0f}m - {max_elev:.0f}m ({max_elev - min_elev:.0f}m relief)")
+
+    # Build elevation band lookup
+    elevation_bands = {}
+    for h in hexes:
+        band = int((h.elevation_avg - min_elev) / ELEVATION_BAND_INTERVAL)
+        band = min(band, ELEVATION_BAND_MAX)
+        elevation_bands[(h.q, h.r)] = band
+
+    # Calculate hex geometry
+    size = hex_size_m / math.sqrt(3)  # Center to vertex
+
+    # Create hidden groups
+    layer_elevation = dwg.g(id="Game_Elevation_Overlay", visibility="hidden")
+    layer_hillside = dwg.g(id="Game_Hillside_Shading", visibility="hidden")
+
+    # === Generate Elevation Overlay ===
+    overlay_count = 0
+    for h in hexes:
+        band = elevation_bands.get((h.q, h.r), 0)
+        opacity = ELEVATION_TINT_OPACITY.get(band, 0) * intensity
+        if opacity <= 0:
+            continue
+
+        # Get hex center in world coordinates and convert to SVG
+        cx, cy = grid.axial_to_world(h.q, h.r)
+        svg_cx, svg_cy = to_svg(cx, cy)
+
+        # Create hex polygon vertices in SVG coordinates
+        points = []
+        for i in range(6):
+            angle = math.radians(60 * i)
+            vx = svg_cx + size * math.cos(angle)
+            vy = svg_cy + size * math.sin(angle)
+            points.append((vx, vy))
+
+        layer_elevation.add(dwg.polygon(
+            points=points,
+            fill='#000000',
+            fill_opacity=opacity,
+            stroke='none',
+        ))
+        overlay_count += 1
+
+    print(f"    Created {overlay_count} elevation overlay polygons (hidden)")
+
+    # === Generate Hillside Shading ===
+    band_width = size * 0.15  # 15% of center-to-vertex distance
+    shade_color = HILLSIDE_COLORS.get(terrain_style, HILLSIDE_COLORS['temperate'])
+    base_opacity = 1.0 * intensity
+
+    shading_count = 0
+    for h in hexes:
+        my_band = elevation_bands.get((h.q, h.r), 0)
+        cx, cy = grid.axial_to_world(h.q, h.r)
+        svg_cx, svg_cy = to_svg(cx, cy)
+
+        neighbors = get_hex_neighbors(h.q, h.r)
+        for dir_idx, (nq, nr) in enumerate(neighbors):
+            neighbor_band = elevation_bands.get((nq, nr))
+
+            # Skip if neighbor doesn't exist or has same/higher elevation
+            if neighbor_band is None or neighbor_band >= my_band:
+                continue
+
+            # Calculate opacity based on elevation difference
+            elev_diff = my_band - neighbor_band
+            opacity = min(base_opacity * elev_diff, 0.6)
+
+            # Get geometric edge index
+            edge_idx = NEIGHBOR_DIR_TO_EDGE[dir_idx]
+
+            # Calculate edge vertices in SVG coordinates
+            angle1 = math.radians(60 * edge_idx)
+            angle2 = math.radians(60 * ((edge_idx + 1) % 6))
+            x1 = svg_cx + size * math.cos(angle1)
+            y1 = svg_cy + size * math.sin(angle1)
+            x2 = svg_cx + size * math.cos(angle2)
+            y2 = svg_cy + size * math.sin(angle2)
+
+            # Calculate inward offset for band
+            mx = (x1 + x2) / 2
+            my_mid = (y1 + y2) / 2
+            dx = svg_cx - mx
+            dy = svg_cy - my_mid
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist > 0:
+                dx /= dist
+                dy /= dist
+
+            x1_inner = x1 + dx * band_width
+            y1_inner = y1 + dy * band_width
+            x2_inner = x2 + dx * band_width
+            y2_inner = y2 + dy * band_width
+
+            layer_hillside.add(dwg.polygon(
+                points=[(x1, y1), (x2, y2), (x2_inner, y2_inner), (x1_inner, y1_inner)],
+                fill=shade_color,
+                fill_opacity=opacity,
+                stroke='none',
+            ))
+            shading_count += 1
+
+    print(f"    Created {shading_count} hillside shading bands (hidden)")
+
+    return layer_elevation, layer_hillside
 
 
 def merge_road_segments(roads: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -1819,6 +2015,18 @@ def render_tactical_svg(
     layer_map_data = dwg.g(id="Map_Data")
     layer_compass = dwg.g(id="Compass_Rose")
     layer_out_of_play_frame = dwg.g(id="Out_Of_Play_Frame")
+
+    # Generate hidden game overlay layers (revealed during game map conversion)
+    print("  Generating hidden game overlay layers...")
+    layer_game_elevation, layer_game_hillside = generate_game_overlays(
+        hexes=hexes,
+        grid=grid,
+        dwg=dwg,
+        to_svg=to_svg,
+        hex_size_m=HEX_SIZE_M,
+        terrain_style='temperate',
+        intensity=1.0
+    )
 
     # Map terrain types to their layer groups
     terrain_layers = {
@@ -3363,6 +3571,9 @@ def render_tactical_svg(
         rotated_content.add(layer_contours_regular)  # Regular contours
         rotated_content.add(layer_contours_index)    # Index contours
         rotated_content.add(layer_contour_labels)    # Contour elevation labels
+        # Game overlay layers (hidden, revealed in game map conversion)
+        rotated_content.add(layer_game_elevation)    # Elevation tinting (hidden)
+        rotated_content.add(layer_game_hillside)     # Hillside shading (hidden)
         rotated_content.add(layer_cliffs)            # Cliffs/embankments
         rotated_content.add(layer_tree_rows)         # Tree rows
         rotated_content.add(layer_barriers)          # Fences/walls
@@ -3427,6 +3638,9 @@ def render_tactical_svg(
         master_group.add(layer_contours_regular)  # Regular contours
         master_group.add(layer_contours_index)    # Index contours
         master_group.add(layer_contour_labels)    # Contour elevation labels
+        # Game overlay layers (hidden, revealed in game map conversion)
+        master_group.add(layer_game_elevation)    # Elevation tinting (hidden)
+        master_group.add(layer_game_hillside)     # Hillside shading (hidden)
         master_group.add(layer_cliffs)            # Cliffs/embankments
         master_group.add(layer_tree_rows)         # Tree rows
         master_group.add(layer_barriers)          # Fences/walls
@@ -4158,8 +4372,10 @@ def main():
             "grid_width": GRID_WIDTH,
             "grid_height": GRID_HEIGHT,
             "timestamp": config.timestamp,
+            "version": VERSION,
             "country": config.country,
             "region": config.region,
+            "rotation_deg": config.rotation_deg,
         },
         "hexes": [
             {

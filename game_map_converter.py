@@ -704,6 +704,45 @@ def generate_hillside_shading(
     return group
 
 
+def unhide_game_overlays(tree: ET.ElementTree) -> bool:
+    """
+    Find and unhide pre-generated Game_Elevation_Overlay and Game_Hillside_Shading layers.
+
+    These layers are now generated during detail map creation (tactical_map.py)
+    with visibility="hidden". This function just reveals them for game maps.
+
+    Args:
+        tree: SVG ElementTree to search and modify
+
+    Returns:
+        True if both layers were found and unhidden, False otherwise
+    """
+    root = tree.getroot()
+
+    found_elevation = False
+    found_hillside = False
+
+    for elem in root.iter():
+        elem_id = elem.get('id')
+        if elem_id == 'Game_Elevation_Overlay':
+            elem.set('visibility', 'visible')
+            found_elevation = True
+            print(f"  Unhid Game_Elevation_Overlay (pre-generated)")
+        elif elem_id == 'Game_Hillside_Shading':
+            elem.set('visibility', 'visible')
+            found_hillside = True
+            print(f"  Unhid Game_Hillside_Shading (pre-generated)")
+
+    if found_elevation and found_hillside:
+        print(f"  Using pre-generated overlays from detail map")
+        return True
+
+    if found_elevation or found_hillside:
+        print(f"  Warning: Only found one overlay layer, generating missing ones")
+
+    return False
+
+
 def modify_existing_frame_color(tree: ET.ElementTree, color: str = None) -> bool:
     """
     Modify the existing Out_Of_Play_Frame to use the maroon color.
@@ -820,32 +859,38 @@ def add_game_layers(
     tree: ET.ElementTree,
     elevation_overlay: ET.Element,
     hillside_shading: ET.Element,
-    hex_labels: ET.Element
+    hex_labels: ET.Element,
+    is_rotated: bool = False
 ) -> None:
     """
     Add game map layers to SVG at appropriate positions.
 
-    Overlays are ALWAYS placed OUTSIDE Rotated_Content, as siblings of Hex_Grid.
-    This is because:
-    - Hex_Markers (source of overlay coordinates) are in screen space
-    - Overlays use screen-space coordinates directly
-    - No coordinate transformation is needed regardless of map rotation
-    - The detail map generator handles all rotation - game map converter does not
+    For ROTATED maps:
+    - Overlays are placed INSIDE Rotated_Content so they rotate with terrain
+    - This ensures overlays visually align with the terrain features they represent
+    - Hex_Markers coordinates work directly because they use the same pre-rotation
+      coordinate system as the terrain layers
 
-    Z-order (bottom to top):
-    - Rotated_Content (contains terrain, contours, roads - handles its own rotation)
-    - Game_Elevation_Overlay (screen-space, outside rotation)
-    - Game_Hillside_Shading (screen-space, outside rotation)
-    - Hex_Grid (screen-space, outside rotation)
+    For NON-ROTATED maps:
+    - Overlays are placed as siblings of Hex_Grid (outside any rotation group)
+
+    Hex labels are ALWAYS placed outside rotation to remain readable.
+
+    Z-order for rotated maps (bottom to top):
+    - Rotated_Content:
+        - Terrain layers
+        - Game_Elevation_Overlay (rotates with terrain)
+        - Game_Hillside_Shading (rotates with terrain)
+    - Hex_Grid (axis-aligned)
     - Hex_Markers
-    - ...
-    - Game_Hex_Labels (at end)
+    - Game_Hex_Labels (at end, axis-aligned)
 
     Args:
         tree: SVG ElementTree to modify
         elevation_overlay: Elevation overlay group
         hillside_shading: Hillside shading group
         hex_labels: Game hex labels group
+        is_rotated: Whether the map has rotation applied
     """
     root = tree.getroot()
 
@@ -859,40 +904,56 @@ def add_game_layers(
                 return result
         return None
 
-    # Insert overlays BEFORE Hex_Grid (outside Rotated_Content)
-    # This places them above terrain but below the hex grid lines
-    result = find_element_and_parent(root, 'Hex_Grid')
-
-    if result:
-        parent, idx, hex_grid = result
-        parent_id = parent.get('id', 'unknown')
-        print(f"  Found Hex_Grid at index {idx} in parent '{parent_id}'")
-
-        # Insert overlays BEFORE Hex_Grid (so they're below grid lines but above terrain)
-        parent.insert(idx, hillside_shading)
-        parent.insert(idx, elevation_overlay)  # This goes before hillside
-        print(f"  Inserted overlays before Hex_Grid (outside any rotation)")
-    else:
-        # Fallback: find Master_Content and insert at end
-        result = find_element_and_parent(root, 'Master_Content')
+    if is_rotated:
+        # For rotated maps, place overlays INSIDE Rotated_Content
+        # so they rotate with the terrain
+        result = find_element_and_parent(root, 'Rotated_Content')
         if result:
-            _, _, master_content = result  # result is (parent, idx, child)
-            master_content.append(elevation_overlay)
-            master_content.append(hillside_shading)
-            print(f"  Fallback: Inserted overlays at end of Master_Content")
+            _, _, rotated_content = result
+            # Insert at end of Rotated_Content (above terrain, below Out_Of_Play_Frame)
+            rotated_content.append(elevation_overlay)
+            rotated_content.append(hillside_shading)
+            print(f"  Inserted overlays inside Rotated_Content (will rotate with terrain)")
         else:
-            # Last resort: after first group
-            for idx, child in enumerate(root):
-                tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                if tag == 'g':
-                    root.insert(idx + 1, elevation_overlay)
-                    root.insert(idx + 2, hillside_shading)
-                    print(f"  Last resort: Inserted overlays after first group")
-                    break
+            # Fallback if Rotated_Content not found (shouldn't happen for rotated maps)
+            print(f"  Warning: Rotated_Content not found, falling back to non-rotated placement")
+            is_rotated = False  # Fall through to non-rotated logic
 
-    # Add hex labels at the end (on top)
-    root.append(hex_labels)
-    print("  Added game hex labels at top")
+    if not is_rotated:
+        # For non-rotated maps, insert overlays BEFORE Hex_Grid
+        result = find_element_and_parent(root, 'Hex_Grid')
+
+        if result:
+            parent, idx, hex_grid = result
+            parent_id = parent.get('id', 'unknown')
+            print(f"  Found Hex_Grid at index {idx} in parent '{parent_id}'")
+
+            # Insert overlays BEFORE Hex_Grid (so they're below grid lines but above terrain)
+            parent.insert(idx, hillside_shading)
+            parent.insert(idx, elevation_overlay)  # This goes before hillside
+            print(f"  Inserted overlays before Hex_Grid")
+        else:
+            # Fallback: find Master_Content and insert at end
+            result = find_element_and_parent(root, 'Master_Content')
+            if result:
+                _, _, master_content = result
+                master_content.append(elevation_overlay)
+                master_content.append(hillside_shading)
+                print(f"  Fallback: Inserted overlays at end of Master_Content")
+            else:
+                # Last resort: after first group
+                for idx, child in enumerate(root):
+                    tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                    if tag == 'g':
+                        root.insert(idx + 1, elevation_overlay)
+                        root.insert(idx + 2, hillside_shading)
+                        print(f"  Last resort: Inserted overlays after first group")
+                        break
+
+    # Add hex labels at the end (on top) - always outside rotation for readability
+    if hex_labels is not None:
+        root.append(hex_labels)
+        print("  Added game hex labels at top")
 
 
 def export_svg(tree: ET.ElementTree, output_path: Path) -> None:
@@ -1186,18 +1247,18 @@ def convert_to_game_map(
     recolored = recolor_terrain_layers(tree, palette)
     print(f"  Recolored {recolored} terrain layers")
 
-    # Check if map has rotation (for logging only - no coordinate transformation needed)
+    # Check if map has rotation
     rotation_info = get_rotation_info(tree)
-    if rotation_info:
+    is_rotated = rotation_info is not None
+    if is_rotated:
         angle, cx, cy = rotation_info
         print(f"\n  Map has rotation: {angle}° around ({cx:.1f}, {cy:.1f})")
-        print(f"  Note: Overlays use screen-space coordinates (no transformation needed)")
+        print(f"  Note: Overlays will be placed inside Rotated_Content to align with terrain")
     else:
         print("\n  Map has no rotation")
 
     # Extract hex positions from SVG (more reliable than recalculating)
-    # These are SCREEN-SPACE coordinates - use them directly for overlays
-    # The Hex_Markers are outside Rotated_Content, so they're already in screen space
+    # These coordinates are in the same system as terrain layers - works for both rotated and non-rotated maps
     print("\nExtracting hex positions from SVG...")
     hex_size_m = hex_data['metadata']['hex_size_m']
     hex_centers = extract_hex_positions_from_svg(tree, hex_data)
@@ -1213,27 +1274,37 @@ def convert_to_game_map(
             cx, cy = hex_to_svg_coords(q, r, hex_size_m, margin + size, margin + size)
             hex_centers[(q, r)] = (cx, cy)
 
-    print("\nCalculating relative elevation bands...")
-    elevation_bands = calculate_relative_elevation_bands(hex_data)
+    print("\nProcessing game map overlays...")
 
-    print("\nGenerating game map layers...")
+    # Try to unhide pre-generated overlay layers (new approach - layers generated during detail map creation)
+    # These are already in the correct coordinate system and position (inside Rotated_Content for rotated maps)
+    overlays_unhidden = unhide_game_overlays(tree)
 
-    # Generate elevation overlays using screen-space coordinates
-    # (Overlays go outside Rotated_Content, same as Hex_Grid)
-    elevation_intensity = config.get('elevation_intensity', 1.0)
-    elevation_overlay = generate_elevation_overlays(
-        hex_data, hex_centers, elevation_bands, elevation_intensity
-    )
+    if not overlays_unhidden:
+        # Fallback for older maps without pre-generated overlays: generate them here
+        print("  Pre-generated overlays not found, generating (fallback for older maps)...")
 
-    # Generate game hex labels (screen-space coordinates)
+        print("\nCalculating relative elevation bands...")
+        elevation_bands = calculate_relative_elevation_bands(hex_data)
+
+        # Generate elevation overlays
+        elevation_intensity = config.get('elevation_intensity', 1.0)
+        elevation_overlay = generate_elevation_overlays(
+            hex_data, hex_centers, elevation_bands, elevation_intensity
+        )
+
+        # Generate hillside shading for elevation transitions
+        hillside_shading = generate_hillside_shading(
+            hex_data, hex_centers, elevation_bands, actual_style, elevation_intensity
+        )
+
+        # Add generated overlays to SVG (only when not using pre-generated ones)
+        add_game_layers(tree, elevation_overlay, hillside_shading, None, is_rotated)
+
+    # Generate game hex labels (always needed, uses screen-space coordinates)
     label_rows = config.get('label_rows', LABEL_ROWS)
     hex_labels = generate_game_hex_labels(hex_data, hex_centers, label_rows)
     print(f"  Created hex labels (rows: {label_rows})")
-
-    # Generate hillside shading for elevation transitions (screen-space coordinates)
-    hillside_shading = generate_hillside_shading(
-        hex_data, hex_centers, elevation_bands, actual_style, elevation_intensity
-    )
 
     # Modify existing frame color to maroon
     frame_color = config.get('frame_color', FRAME_COLOR)
@@ -1246,10 +1317,9 @@ def convert_to_game_map(
     # Hide detail layers (paths, powerlines, tree rows)
     hide_detail_layers(tree)
 
-    # Add game layers to SVG
-    # Overlays always go OUTSIDE Rotated_Content (as siblings of Hex_Grid)
-    # using screen-space coordinates - no rotation handling needed
-    add_game_layers(tree, elevation_overlay, hillside_shading, hex_labels)
+    # Add hex labels at the end (on top) - always outside rotation for readability
+    tree.getroot().append(hex_labels)
+    print("  Added game hex labels at top")
 
     # Create output directory
     output_dir = detailed_map_dir / "game_map"
