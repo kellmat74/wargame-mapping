@@ -1975,6 +1975,7 @@ config = MapConfig(
         let previewMap = null;
         let boundaryPolygon = null;
         let centerMarker = null;
+        let orientationArrow = null;
 
         function initPreviewMap() {
             // Initialize Leaflet map with a default view
@@ -2033,6 +2034,10 @@ config = MapConfig(
                     previewMap.removeLayer(centerMarker);
                     centerMarker = null;
                 }
+                if (orientationArrow) {
+                    previewMap.removeLayer(orientationArrow);
+                    orientationArrow = null;
+                }
                 document.getElementById('statCoverage').textContent = '--';
                 document.getElementById('statRotation').textContent = '--';
                 return;
@@ -2079,11 +2084,71 @@ config = MapConfig(
 
             // Create boundary polygon
             boundaryPolygon = L.polygon(cornerLatLngs, {
-                color: '#00d4ff',
+                color: '#000000',
                 weight: 3,
                 fillColor: '#00d4ff',
-                fillOpacity: 0.1,
-                dashArray: '10, 5'
+                fillOpacity: 0.1
+            }).addTo(previewMap);
+
+            // Create orientation arrow pointing to top of map
+            // Arrow is placed at the top center of the boundary, pointing outward
+            // For multi-map, this will be replaced with map labels (A, B, C, D)
+            if (orientationArrow) {
+                previewMap.removeLayer(orientationArrow);
+            }
+
+            // Calculate arrow position - at top center of boundary, pointing outward
+            const arrowDistance = halfHeight + 200; // Just beyond top edge (meters)
+            const arrowLength = 500;   // Arrow length (meters)
+            const arrowWidth = 400;    // Arrow width at base (meters)
+
+            // Arrow points toward "top" of map (in direction of bearingAtTop)
+            const arrowAngleRad = -state.bearingAtTop * Math.PI / 180;
+
+            // Arrow tip position (beyond the top edge)
+            const tipDx = (arrowDistance + arrowLength) * Math.sin(arrowAngleRad);
+            const tipDy = (arrowDistance + arrowLength) * Math.cos(arrowAngleRad);
+
+            // Arrow base corners (perpendicular to arrow direction)
+            const baseCenterDx = arrowDistance * Math.sin(arrowAngleRad);
+            const baseCenterDy = arrowDistance * Math.cos(arrowAngleRad);
+
+            // Perpendicular offset for arrow base width
+            const perpAngle = arrowAngleRad + Math.PI / 2;
+            const halfWidth = arrowWidth / 2;
+            const baseLeft = {
+                dx: baseCenterDx + halfWidth * Math.sin(perpAngle),
+                dy: baseCenterDy + halfWidth * Math.cos(perpAngle)
+            };
+            const baseRight = {
+                dx: baseCenterDx - halfWidth * Math.sin(perpAngle),
+                dy: baseCenterDy - halfWidth * Math.cos(perpAngle)
+            };
+
+            // Convert to lat/lon
+            const arrowPoints = [
+                // Tip
+                [
+                    state.centerLat + tipDy / METERS_PER_DEG_LAT,
+                    state.centerLon + tipDx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180))
+                ],
+                // Base left
+                [
+                    state.centerLat + baseLeft.dy / METERS_PER_DEG_LAT,
+                    state.centerLon + baseLeft.dx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180))
+                ],
+                // Base right
+                [
+                    state.centerLat + baseRight.dy / METERS_PER_DEG_LAT,
+                    state.centerLon + baseRight.dx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180))
+                ]
+            ];
+
+            orientationArrow = L.polygon(arrowPoints, {
+                color: '#000000',
+                weight: 2,
+                fillColor: '#ff6b6b',
+                fillOpacity: 0.9
             }).addTo(previewMap);
 
             // Update or create center marker
