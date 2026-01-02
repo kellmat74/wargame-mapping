@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tactical Map Configuration</title>
+    <!-- Leaflet.js for map preview -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
     <style>
         * {
             box-sizing: border-box;
@@ -454,6 +457,51 @@
             color: #00d4ff;
             border-color: #00d4ff;
         }
+
+        /* Preview Map Styles */
+        #previewMap {
+            height: 400px;
+            width: 100%;
+            border-radius: 4px;
+            background: #0d1b2a;
+        }
+
+        .preview-stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-top: 15px;
+            padding: 15px;
+            background: #0d1b2a;
+            border-radius: 4px;
+        }
+
+        .preview-stat {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .preview-stat-label {
+            font-size: 11px;
+            color: #888;
+            text-transform: uppercase;
+        }
+
+        .preview-stat-value {
+            font-size: 14px;
+            color: #00d4ff;
+            font-family: 'Monaco', 'Menlo', monospace;
+        }
+
+        .preview-hint {
+            font-size: 12px;
+            color: #666;
+            margin-top: 10px;
+        }
+
+        .leaflet-container {
+            background: #0d1b2a;
+        }
     </style>
 </head>
 <body>
@@ -601,6 +649,33 @@
             </div>
         </div>
 
+        <!-- Map Preview -->
+        <div class="panel">
+            <h2>Map Preview</h2>
+            <div id="previewMap"></div>
+            <div class="preview-stats" id="previewStats">
+                <div class="preview-stat">
+                    <span class="preview-stat-label">Coverage</span>
+                    <span class="preview-stat-value" id="statCoverage">--</span>
+                </div>
+                <div class="preview-stat">
+                    <span class="preview-stat-label">Hex Count</span>
+                    <span class="preview-stat-value" id="statHexCount">1,222 hexes</span>
+                </div>
+                <div class="preview-stat">
+                    <span class="preview-stat-label">Print Size</span>
+                    <span class="preview-stat-value" id="statPrintSize">34" x 22"</span>
+                </div>
+                <div class="preview-stat">
+                    <span class="preview-stat-label">Rotation</span>
+                    <span class="preview-stat-value" id="statRotation">0° (North up)</span>
+                </div>
+            </div>
+            <div class="preview-hint">
+                Click on the map to recenter. The rectangle shows the map boundary with current rotation.
+            </div>
+        </div>
+
         <!-- Step 2: Generate -->
         <div class="panel">
             <h2>Step 2: Generate</h2>
@@ -609,6 +684,7 @@
                 <button class="btn btn-success" id="generateBtn" onclick="generateMap()">Generate Map</button>
                 <button class="btn btn-secondary" onclick="resetToDefaults()">Reset</button>
                 <button class="btn btn-danger" id="stopServerBtn" onclick="stopServer()" style="display: none;">Stop Server</button>
+                <span id="versionLabel" style="margin-left: auto; font-size: 12px; color: #666; align-self: center;"></span>
             </div>
             <div class="region-info" style="margin-top: 15px;" id="serverModeHint">
                 <span id="serverStatus">Checking server...</span>
@@ -1480,6 +1556,7 @@
             document.getElementById('centerLon').value = state.centerLon.toFixed(6);
 
             updateDisplay();
+            updatePreviewBoundary();
         }
 
         function saveConfig() {
@@ -1619,6 +1696,13 @@ config = MapConfig(
                         '<span style="color: #10b981;">Server connected</span> - Click "Generate Map" to create your map';
                     document.getElementById('generateBtn').disabled = false;
                     document.getElementById('stopServerBtn').style.display = 'inline-block';
+                    // Fetch and display version
+                    fetch('/api/version')
+                        .then(r => r.json())
+                        .then(v => {
+                            document.getElementById('versionLabel').textContent = `Rendering Engine ${v.version}`;
+                        })
+                        .catch(() => {});
                 })
                 .catch(() => {
                     serverAvailable = false;
@@ -1626,6 +1710,7 @@ config = MapConfig(
                         'To generate maps directly, run: <code style="background: #0d1b2a; padding: 2px 6px; border-radius: 3px;">python map_server.py</code>';
                     document.getElementById('generateBtn').disabled = true;
                     document.getElementById('stopServerBtn').style.display = 'none';
+                    document.getElementById('versionLabel').textContent = '';
                 });
         }
 
@@ -1834,6 +1919,7 @@ config = MapConfig(
                     document.getElementById('centerLon').value = lon.toFixed(6);
 
                     updateDisplay();
+                    updatePreviewBoundary();
                     showStatus(`${format} coordinates parsed: ${lat.toFixed(6)}, ${lon.toFixed(6)}`, 'success');
                 }
             });
@@ -1846,6 +1932,7 @@ config = MapConfig(
                 state.mapShiftUp = 0;
                 state.mapShiftRight = 0;
                 updateDisplay();
+                updatePreviewBoundary();
             });
 
             document.getElementById('centerLon').addEventListener('input', (e) => {
@@ -1855,6 +1942,7 @@ config = MapConfig(
                 state.mapShiftUp = 0;
                 state.mapShiftRight = 0;
                 updateDisplay();
+                updatePreviewBoundary();
             });
 
             // Bearing at top slider
@@ -1875,6 +1963,161 @@ config = MapConfig(
 
             // Check if server is running
             checkServer();
+
+            // Initialize preview map
+            initPreviewMap();
+        });
+
+        // ============================================
+        // Preview Map Functions
+        // ============================================
+
+        let previewMap = null;
+        let boundaryPolygon = null;
+        let centerMarker = null;
+
+        function initPreviewMap() {
+            // Initialize Leaflet map with a default view
+            previewMap = L.map('previewMap', {
+                center: [35, 135],  // Default to Japan area
+                zoom: 8,
+                zoomControl: true
+            });
+
+            // Add OpenTopoMap tiles (same source as reference tiles)
+            L.tileLayer('https://tile.opentopomap.org/{z}/{x}/{y}.png', {
+                maxZoom: 17,
+                attribution: '© OpenTopoMap contributors'
+            }).addTo(previewMap);
+
+            // Add click handler for recentering
+            previewMap.on('click', onMapClick);
+
+            // Initial boundary update if we have coordinates
+            updatePreviewBoundary();
+        }
+
+        function onMapClick(e) {
+            // Update center coordinates
+            state.centerLat = e.latlng.lat;
+            state.centerLon = e.latlng.lng;
+            state.shiftNorth = 0;
+            state.shiftEast = 0;
+            state.mapShiftUp = 0;
+            state.mapShiftRight = 0;
+            state.region = ''; // Reset to auto-detect
+
+            // Update form fields
+            document.getElementById('centerLat').value = state.centerLat.toFixed(6);
+            document.getElementById('centerLon').value = state.centerLon.toFixed(6);
+
+            // Update displays
+            updateDisplay();
+            updatePreviewBoundary();
+
+            showStatus(`Center moved to ${state.centerLat.toFixed(6)}, ${state.centerLon.toFixed(6)}`, 'info');
+        }
+
+        function updatePreviewBoundary() {
+            if (!previewMap) return;
+
+            // Check for valid coordinates
+            if (state.centerLat === null || state.centerLon === null ||
+                isNaN(state.centerLat) || isNaN(state.centerLon)) {
+                // Remove existing boundary if any
+                if (boundaryPolygon) {
+                    previewMap.removeLayer(boundaryPolygon);
+                    boundaryPolygon = null;
+                }
+                if (centerMarker) {
+                    previewMap.removeLayer(centerMarker);
+                    centerMarker = null;
+                }
+                document.getElementById('statCoverage').textContent = '--';
+                document.getElementById('statRotation').textContent = '--';
+                return;
+            }
+
+            // Calculate map dimensions in meters
+            const size = HEX_SIZE_M / Math.sqrt(3);
+            const colSpacing = 1.5 * size;
+            const rowSpacing = HEX_SIZE_M;
+            const widthM = (GRID_WIDTH - 1) * colSpacing + 2 * size;
+            const heightM = GRID_HEIGHT * rowSpacing;
+
+            // Calculate corner offsets from center (unrotated)
+            const halfWidth = widthM / 2;
+            const halfHeight = heightM / 2;
+
+            // Corner offsets in meters (relative to center, unrotated)
+            const corners = [
+                { dx: -halfWidth, dy: halfHeight },   // Top-left
+                { dx: halfWidth, dy: halfHeight },    // Top-right
+                { dx: halfWidth, dy: -halfHeight },   // Bottom-right
+                { dx: -halfWidth, dy: -halfHeight }   // Bottom-left
+            ];
+
+            // Apply rotation if needed
+            const rotationRad = -state.bearingAtTop * Math.PI / 180;  // Convert bearing to rotation
+            const rotatedCorners = corners.map(c => {
+                const dx = c.dx * Math.cos(rotationRad) - c.dy * Math.sin(rotationRad);
+                const dy = c.dx * Math.sin(rotationRad) + c.dy * Math.cos(rotationRad);
+                return { dx, dy };
+            });
+
+            // Convert meter offsets to lat/lon
+            const cornerLatLngs = rotatedCorners.map(c => {
+                const lat = state.centerLat + (c.dy / METERS_PER_DEG_LAT);
+                const lon = state.centerLon + (c.dx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180)));
+                return [lat, lon];
+            });
+
+            // Remove existing boundary
+            if (boundaryPolygon) {
+                previewMap.removeLayer(boundaryPolygon);
+            }
+
+            // Create boundary polygon
+            boundaryPolygon = L.polygon(cornerLatLngs, {
+                color: '#00d4ff',
+                weight: 3,
+                fillColor: '#00d4ff',
+                fillOpacity: 0.1,
+                dashArray: '10, 5'
+            }).addTo(previewMap);
+
+            // Update or create center marker
+            if (centerMarker) {
+                centerMarker.setLatLng([state.centerLat, state.centerLon]);
+            } else {
+                centerMarker = L.circleMarker([state.centerLat, state.centerLon], {
+                    radius: 8,
+                    color: '#ff6b6b',
+                    fillColor: '#ff6b6b',
+                    fillOpacity: 1,
+                    weight: 2
+                }).addTo(previewMap);
+            }
+
+            // Fit map to boundary
+            previewMap.fitBounds(boundaryPolygon.getBounds(), { padding: [50, 50] });
+
+            // Update statistics
+            document.getElementById('statCoverage').textContent =
+                `${(widthM/1000).toFixed(1)} x ${(heightM/1000).toFixed(1)} km`;
+
+            const rotationDisplay = state.bearingAtTop === 0
+                ? '0° (North up)'
+                : `${state.bearingAtTop}° (${bearingToDirection(state.bearingAtTop)} up)`;
+            document.getElementById('statRotation').textContent = rotationDisplay;
+        }
+
+        // Update preview when rotation changes
+        const originalRotationHandler = document.getElementById('rotationSlider').oninput;
+        document.getElementById('rotationSlider').addEventListener('input', (e) => {
+            // The existing handler updates state.bearingAtTop
+            // Now also update the preview
+            setTimeout(updatePreviewBoundary, 0);
         });
     </script>
 </body>

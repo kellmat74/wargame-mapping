@@ -113,6 +113,23 @@ def save_defaults():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/version')
+def get_version():
+    """Get the current generator version."""
+    # Read VERSION from tactical_map.py without importing it
+    # (importing triggers pyproj which breaks subprocess forking)
+    try:
+        version_file = Path(__file__).parent / 'tactical_map.py'
+        with open(version_file) as f:
+            for line in f:
+                if line.startswith('VERSION'):
+                    version = line.split('=')[1].strip().strip('"\'')
+                    return jsonify({'version': version})
+        return jsonify({'version': 'unknown'})
+    except Exception as e:
+        return jsonify({'version': 'unknown', 'error': str(e)})
+
+
 @app.route('/api/generate', methods=['POST'])
 def generate_map():
     """Start map generation."""
@@ -444,6 +461,7 @@ def list_detailed_maps():
                                             'country': country_dir.name,
                                             'name': map_dir.name,
                                             'version': version_dir.name,
+                                            'render_version': metadata.get('version'),
                                             'center_lat': metadata.get('center_lat'),
                                             'center_lon': metadata.get('center_lon'),
                                             'has_game_map': (version_dir / 'game_map').exists()
@@ -461,6 +479,7 @@ def list_detailed_maps():
                                     'country': country_dir.name,
                                     'name': map_dir.name,
                                     'version': None,
+                                    'render_version': metadata.get('version'),
                                     'center_lat': metadata.get('center_lat'),
                                     'center_lon': metadata.get('center_lon'),
                                     'has_game_map': (map_dir / 'game_map').exists()
@@ -589,6 +608,190 @@ def get_game_map_status():
             'error': game_map_status['error'],
             'output_lines': len(game_map_status['output'])
         })
+
+
+@app.route('/api/rerender-map', methods=['POST'])
+def rerender_map():
+    """Re-render a detailed map with the current version of the rendering engine.
+
+    Loads config from map_config.json or reconstructs from hexdata.json,
+    replaces the existing folder with a new render.
+    """
+    global generation_status
+    import shutil
+    import re
+    import mgrs
+
+    # Read VERSION from tactical_map.py without importing it
+    # (importing triggers pyproj which breaks subprocess forking)
+    version_str = "v1.0.0"  # fallback
+    try:
+        version_file = Path(__file__).parent / 'tactical_map.py'
+        with open(version_file) as f:
+            for line in f:
+                if line.startswith('VERSION'):
+                    # Parse: VERSION = "v1.0.0"
+                    version_str = line.split('=')[1].strip().strip('"\'')
+                    break
+    except:
+        pass
+
+    with status_lock:
+        if generation_status['running']:
+            return jsonify({'error': 'Generation already in progress'}), 409
+
+    try:
+        data = request.get_json()
+        map_path = data.get('map_path')
+
+        if not map_path:
+            return jsonify({'error': 'No map path specified'}), 400
+
+        map_dir = Path(map_path)
+        if not map_dir.exists():
+            return jsonify({'error': f'Map directory not found: {map_path}'}), 404
+
+        # Try to load config from map_config.json first
+        config_file = map_dir / 'map_config.json'
+        hexdata_files = list(map_dir.glob('*_hexdata.json'))
+
+        if config_file.exists():
+            with open(config_file) as f:
+                config = json.load(f)
+        elif hexdata_files:
+            # Reconstruct config from hexdata.json metadata
+            with open(hexdata_files[0]) as f:
+                hexdata = json.load(f)
+                metadata = hexdata.get('metadata', {})
+
+            config = {
+                'name': metadata.get('name', map_dir.parent.name),
+                'center_lat': metadata.get('center_lat'),
+                'center_lon': metadata.get('center_lon'),
+                'region': metadata.get('region'),
+                'country': metadata.get('country', ''),
+                'rotation_deg': metadata.get('rotation_deg', 0),
+            }
+
+            if not config['center_lat'] or not config['center_lon']:
+                return jsonify({'error': 'Cannot reconstruct config: missing coordinates in hexdata'}), 400
+        else:
+            return jsonify({'error': 'No map_config.json or hexdata.json found'}), 404
+
+        # Compute MGRS region from coordinates if missing
+        if not config.get('region') and config.get('center_lat') and config.get('center_lon'):
+            m = mgrs.MGRS()
+            mgrs_str = m.toMGRS(config['center_lat'], config['center_lon'], MGRSPrecision=0)
+            # mgrs_str format: "36UUA" -> "36U/UA"
+            zone = mgrs_str[:3] if mgrs_str[2].isalpha() else mgrs_str[:2]
+            square = mgrs_str[len(zone):len(zone)+2]
+            config['region'] = f"{zone}/{square}"
+
+        # Extract base timestamp from folder name (strip version suffix if present)
+        folder_name = map_dir.name
+        # Match: YYYY-MM-DD_HH-MM or YYYY-MM-DD_HH-MM_vX.Y.Z
+        match = re.match(r'^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2})(?:_v[\d.]+)?$', folder_name)
+        if match:
+            base_timestamp = match.group(1)
+        else:
+            # Folder doesn't match expected pattern, use current timestamp
+            from datetime import datetime
+            base_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+
+        # Create new timestamp with current version
+        new_timestamp = f"{base_timestamp}_{version_str}"
+        config['timestamp'] = new_timestamp
+
+        # Determine new folder path
+        parent_dir = map_dir.parent
+        new_folder = parent_dir / new_timestamp
+
+        # If re-rendering to same version, delete old folder first
+        if new_folder == map_dir:
+            # Same folder - clear contents
+            for item in map_dir.iterdir():
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+        elif new_folder.exists():
+            # Different version folder already exists - clear it
+            shutil.rmtree(new_folder)
+
+        # If folder name is changing (version upgrade), we'll let the old folder remain
+        # until new generation succeeds, then can clean up manually
+
+        # Save config for the generator
+        main_config_path = Path(__file__).parent / 'map_config.json'
+        with open(main_config_path, 'w') as f:
+            json.dump(config, f, indent=2)
+
+        # Get region from config
+        region = config.get('region', '')
+
+        # Reset status
+        with status_lock:
+            generation_status = {
+                'running': True,
+                'output': [],
+                'error': None,
+                'complete': False
+            }
+
+        # Clear the queue
+        while not output_queue.empty():
+            try:
+                output_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        # Add info about re-render
+        output_queue.put(f"Re-rendering map with {version_str}")
+        output_queue.put(f"Source: {map_path}")
+        output_queue.put(f"New timestamp: {new_timestamp}")
+
+        # Track old folder for cleanup after successful generation
+        # But DON'T delete if old folder is a parent/ancestor of where new files will go
+        # (this happens when old map had no timestamp subfolder)
+        old_folder_to_delete = None
+        expected_new_output = Path(__file__).parent / 'output' / config.get('country', '') / config.get('name', '') / new_timestamp
+
+        if new_folder != map_dir and map_dir.exists():
+            # Check if the old folder is a parent of where new output will go
+            try:
+                expected_new_output.relative_to(map_dir)
+                # If we get here, map_dir is a parent of expected output - DON'T delete it
+                output_queue.put(f"Note: Old folder '{folder_name}' contains new output location, will not be deleted")
+            except ValueError:
+                # map_dir is not a parent, safe to delete
+                old_folder_to_delete = map_dir
+                output_queue.put(f"Note: Old folder '{folder_name}' will be deleted after successful generation")
+
+        # Start generation in background thread with cleanup callback
+        def run_generation_with_cleanup():
+            run_generation(region)
+            # Check if generation succeeded before deleting old folder
+            with status_lock:
+                if generation_status['complete'] and not generation_status['error']:
+                    if old_folder_to_delete and old_folder_to_delete.exists():
+                        try:
+                            shutil.rmtree(old_folder_to_delete)
+                            output_queue.put(f"Cleaned up old folder: {old_folder_to_delete.name}")
+                        except Exception as e:
+                            output_queue.put(f"Warning: Could not delete old folder: {e}")
+
+        thread = threading.Thread(target=run_generation_with_cleanup)
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({
+            'success': True,
+            'message': 'Re-render started',
+            'new_timestamp': new_timestamp
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/shutdown', methods=['POST'])
