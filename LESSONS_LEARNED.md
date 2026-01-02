@@ -292,6 +292,56 @@ Added `diagnose_hex_alignment()` to trace:
 - Elevation overlays affect z-order of roads/buildings (they appear under overlays)
 - Road/bridge connections sometimes missing in detail maps
 
+## Rotation-Aware Overlay Alignment (v2.0.0)
+
+### The Problem
+On rotated maps, elevation overlays didn't align with the hex grid. The hex grid stays unrotated (flat-top, aligned with print frame), but terrain rotates underneath.
+
+### The Solution: Transparency Sheet Model
+Think of it as a transparency sheet rotating over fixed paper:
+- **Hex grid** = fixed on the paper (unrotated)
+- **Terrain** = transparency that rotates around the map center
+- **Elevation values** = sampled based on what terrain "slides into" each hex after rotation
+
+### SVG Structure
+```
+Master_Content
+├── Rotated_Content (transform="rotate(...)")
+│   └── Terrain, contours, roads, MGRS grid
+├── Out_Of_Play_Frame
+├── Game_Elevation_Overlay  ← OUTSIDE rotation (aligns with Hex_Grid)
+├── Game_Hillside_Shading   ← OUTSIDE rotation (aligns with Hex_Grid)
+├── Hex_Grid                ← stays unrotated
+└── Hex_Labels
+```
+
+### Rotation-Aware Elevation Sampling
+For each hex on the static grid:
+1. Get hex center SVG position (hx, hy)
+2. Rotate that position by the OPPOSITE angle around the rotation center
+3. This gives the "source" terrain position (where terrain was before rotation)
+4. Sample elevation at that source position
+5. Assign that elevation to the hex
+
+```python
+# Inverse rotation to find source terrain position
+angle_rad = math.radians(-rotation_deg)  # Opposite direction
+dx = svg_cx - rot_center_x
+dy = svg_cy - rot_center_y
+source_svg_x = rot_center_x + dx * cos(angle_rad) - dy * sin(angle_rad)
+source_svg_y = rot_center_y + dx * sin(angle_rad) + dy * cos(angle_rad)
+# Sample elevation from DEM at source position
+```
+
+### Hillside Shading (Rewritten)
+Instead of using a confusing direction-to-edge mapping, hillside shading now uses pure geometry:
+1. For each hex, compute all 6 vertices in SVG coordinates
+2. For each neighbor in a lower elevation band, compute direction to that neighbor
+3. Find which edge faces the neighbor using dot products (edge whose outward normal best aligns with direction)
+4. Draw shading band on that edge
+
+This avoids coordinate system confusion from the SVG Y-axis flip.
+
 ## Future Improvements
 
 - [ ] Add river rendering with proper styling

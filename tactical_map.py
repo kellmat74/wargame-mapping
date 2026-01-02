@@ -49,7 +49,7 @@ GEOFABRIK_DIR = DATA_DIR / "geofabrik"
 DEFAULTS_FILE = Path("map_defaults.json")
 
 # === Version ===
-VERSION = "v1.1.0"
+VERSION = "v2.0.0"
 
 
 def load_map_defaults() -> dict:
@@ -328,9 +328,6 @@ HILLSIDE_COLORS = {
     'arid': '#9A8B70',       # Darker tan/khaki for arid terrain
 }
 
-# Mapping from neighbor direction to geometric edge index
-# (for hillside shading band placement)
-NEIGHBOR_DIR_TO_EDGE = [4, 5, 0, 1, 2, 3]
 
 
 @dataclass
@@ -971,42 +968,113 @@ def generate_game_overlays(
     grid,
     dwg,
     to_svg,
+    svg_to_world,
     hex_size_m: float = 250,
     terrain_style: str = 'temperate',
-    intensity: float = 1.0
+    intensity: float = 1.0,
+    rotation_deg: float = 0,
+    rot_center_svg: tuple = None,
+    dem=None,
+    dem_crs=None,
+    grid_crs=None,
 ):
     """
     Generate hidden elevation overlay and hillside shading layers.
 
-    These layers use the same coordinate system as terrain layers,
-    so they align correctly regardless of map rotation. They are hidden
-    by default and revealed during game map conversion.
+    The overlay hexes are positioned to align with the Hex_Grid (flat-top, unrotated).
+    For rotated maps, the elevation VALUES are sampled from the terrain position
+    that will appear under each hex after the terrain rotates.
 
     Args:
         hexes: List of TacticalHex objects with elevation_avg
         grid: TacticalHexGrid for coordinate conversion
         dwg: svgwrite.Drawing object
         to_svg: Function to convert world coordinates to SVG coordinates
+        svg_to_world: Function to convert SVG coordinates to world coordinates
         hex_size_m: Hex size in meters (flat edge to flat edge)
         terrain_style: 'temperate' or 'arid' for hillside color
         intensity: Opacity multiplier (default 1.0)
+        rotation_deg: Map rotation in degrees (for sampling elevation at rotated positions)
+        rot_center_svg: (cx, cy) rotation center in SVG coordinates
+        dem: DEM raster for elevation sampling (required for rotated maps)
+        dem_crs: CRS of the DEM
+        grid_crs: CRS of the grid (UTM)
 
     Returns:
         Tuple of (elevation_overlay_group, hillside_shading_group)
     """
-    # Calculate elevation bands relative to map minimum
-    elevations = [h.elevation_avg for h in hexes]
-    min_elev = min(elevations) if elevations else 0
-    max_elev = max(elevations) if elevations else 0
+    # For rotated maps, we need to sample elevation at the terrain position
+    # that will "slide into" each hex after rotation (the transparency sheet model)
+    if rotation_deg != 0 and dem is not None and rot_center_svg is not None:
+        print(f"  Game overlays - Sampling elevation for {rotation_deg}° rotation...")
+        from pyproj import Transformer
+        transformer = Transformer.from_crs(grid_crs, dem_crs, always_xy=True)
 
-    print(f"  Game overlays - Elevation range: {min_elev:.0f}m - {max_elev:.0f}m ({max_elev - min_elev:.0f}m relief)")
+        # Calculate elevation for each hex based on rotated terrain position
+        rotated_elevations = {}
+        angle_rad = math.radians(-rotation_deg)  # Opposite direction to find source
+        cos_a = math.cos(angle_rad)
+        sin_a = math.sin(angle_rad)
+        rcx, rcy = rot_center_svg
 
-    # Build elevation band lookup
-    elevation_bands = {}
-    for h in hexes:
-        band = int((h.elevation_avg - min_elev) / ELEVATION_BAND_INTERVAL)
-        band = min(band, ELEVATION_BAND_MAX)
-        elevation_bands[(h.q, h.r)] = band
+        for h in hexes:
+            # Get hex center in SVG coordinates (where it appears on the printed page)
+            world_cx, world_cy = grid.axial_to_world(h.q, h.r)
+            svg_cx, svg_cy = to_svg(world_cx, world_cy)
+
+            # Find the source terrain position (inverse rotation)
+            # What terrain point will slide into this hex position after rotation?
+            dx = svg_cx - rcx
+            dy = svg_cy - rcy
+            source_svg_x = rcx + dx * cos_a - dy * sin_a
+            source_svg_y = rcy + dx * sin_a + dy * cos_a
+
+            # Convert source SVG position back to world coordinates
+            source_world_x, source_world_y = svg_to_world(source_svg_x, source_svg_y)
+
+            # Sample elevation from DEM at source position
+            try:
+                lon, lat = transformer.transform(source_world_x, source_world_y)
+                row, col = dem.index(lon, lat)
+                if 0 <= row < dem.height and 0 <= col < dem.width:
+                    elev = dem.read(1)[row, col]
+                    if elev == dem.nodata or elev < -1000:
+                        elev = 0
+                else:
+                    elev = 0
+            except:
+                elev = 0
+
+            rotated_elevations[(h.q, h.r)] = elev
+
+        # Use rotated elevations for band calculation
+        elevations = list(rotated_elevations.values())
+        min_elev = min(elevations) if elevations else 0
+        max_elev = max(elevations) if elevations else 0
+
+        print(f"  Game overlays - Rotated elevation range: {min_elev:.0f}m - {max_elev:.0f}m ({max_elev - min_elev:.0f}m relief)")
+
+        # Build elevation band lookup from rotated elevations
+        elevation_bands = {}
+        for h in hexes:
+            elev = rotated_elevations.get((h.q, h.r), 0)
+            band = int((elev - min_elev) / ELEVATION_BAND_INTERVAL)
+            band = min(band, ELEVATION_BAND_MAX)
+            elevation_bands[(h.q, h.r)] = band
+    else:
+        # No rotation - use pre-calculated elevations from hex objects
+        elevations = [h.elevation_avg for h in hexes]
+        min_elev = min(elevations) if elevations else 0
+        max_elev = max(elevations) if elevations else 0
+
+        print(f"  Game overlays - Elevation range: {min_elev:.0f}m - {max_elev:.0f}m ({max_elev - min_elev:.0f}m relief)")
+
+        # Build elevation band lookup
+        elevation_bands = {}
+        for h in hexes:
+            band = int((h.elevation_avg - min_elev) / ELEVATION_BAND_INTERVAL)
+            band = min(band, ELEVATION_BAND_MAX)
+            elevation_bands[(h.q, h.r)] = band
 
     # Calculate hex geometry
     size = hex_size_m / math.sqrt(3)  # Center to vertex
@@ -1023,17 +1091,19 @@ def generate_game_overlays(
         if opacity <= 0:
             continue
 
-        # Get hex center in world coordinates and convert to SVG
+        # Get hex center in world coordinates
         cx, cy = grid.axial_to_world(h.q, h.r)
-        svg_cx, svg_cy = to_svg(cx, cy)
 
-        # Create hex polygon vertices in SVG coordinates
+        # Calculate hex polygon vertices in WORLD coordinates first,
+        # then apply to_svg() to each vertex. This ensures the Y-axis
+        # flip is applied correctly (matching how Hex_Grid is drawn).
         points = []
         for i in range(6):
             angle = math.radians(60 * i)
-            vx = svg_cx + size * math.cos(angle)
-            vy = svg_cy + size * math.sin(angle)
-            points.append((vx, vy))
+            world_vx = cx + size * math.cos(angle)
+            world_vy = cy + size * math.sin(angle)
+            svg_vx, svg_vy = to_svg(world_vx, world_vy)
+            points.append((svg_vx, svg_vy))
 
         layer_elevation.add(dwg.polygon(
             points=points,
@@ -1046,6 +1116,10 @@ def generate_game_overlays(
     print(f"    Created {overlay_count} elevation overlay polygons (hidden)")
 
     # === Generate Hillside Shading ===
+    # Rewritten from scratch: for each hex, check each neighbor. If neighbor
+    # is in a lower elevation band, shade the edge facing that neighbor.
+    # Edge detection is done geometrically in SVG space to avoid coordinate
+    # system confusion.
     band_width = size * 0.15  # 15% of center-to-vertex distance
     shade_color = HILLSIDE_COLORS.get(terrain_style, HILLSIDE_COLORS['temperate'])
     base_opacity = 1.0 * intensity
@@ -1053,49 +1127,94 @@ def generate_game_overlays(
     shading_count = 0
     for h in hexes:
         my_band = elevation_bands.get((h.q, h.r), 0)
-        cx, cy = grid.axial_to_world(h.q, h.r)
-        svg_cx, svg_cy = to_svg(cx, cy)
+        if my_band == 0:
+            continue  # Lowest band - no neighbors can be lower
+
+        # Get hex center in both coordinate systems
+        world_cx, world_cy = grid.axial_to_world(h.q, h.r)
+        svg_cx, svg_cy = to_svg(world_cx, world_cy)
+
+        # Precompute hex vertices in SVG coordinates
+        svg_vertices = []
+        for i in range(6):
+            angle = math.radians(60 * i)
+            world_vx = world_cx + size * math.cos(angle)
+            world_vy = world_cy + size * math.sin(angle)
+            svg_vx, svg_vy = to_svg(world_vx, world_vy)
+            svg_vertices.append((svg_vx, svg_vy))
 
         neighbors = get_hex_neighbors(h.q, h.r)
-        for dir_idx, (nq, nr) in enumerate(neighbors):
+        for nq, nr in neighbors:
             neighbor_band = elevation_bands.get((nq, nr))
 
-            # Skip if neighbor doesn't exist or has same/higher elevation
+            # Skip if neighbor doesn't exist or has same/higher band
             if neighbor_band is None or neighbor_band >= my_band:
                 continue
 
-            # Calculate opacity based on elevation difference
-            elev_diff = my_band - neighbor_band
-            opacity = min(base_opacity * elev_diff, 0.6)
+            # Get neighbor center in SVG coordinates
+            neighbor_world_cx, neighbor_world_cy = grid.axial_to_world(nq, nr)
+            neighbor_svg_cx, neighbor_svg_cy = to_svg(neighbor_world_cx, neighbor_world_cy)
 
-            # Get geometric edge index
-            edge_idx = NEIGHBOR_DIR_TO_EDGE[dir_idx]
+            # Direction from our hex to neighbor (in SVG space)
+            dir_x = neighbor_svg_cx - svg_cx
+            dir_y = neighbor_svg_cy - svg_cy
+            dir_len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
+            if dir_len == 0:
+                continue
+            dir_x /= dir_len
+            dir_y /= dir_len
 
-            # Calculate edge vertices in SVG coordinates
-            angle1 = math.radians(60 * edge_idx)
-            angle2 = math.radians(60 * ((edge_idx + 1) % 6))
-            x1 = svg_cx + size * math.cos(angle1)
-            y1 = svg_cy + size * math.sin(angle1)
-            x2 = svg_cx + size * math.cos(angle2)
-            y2 = svg_cy + size * math.sin(angle2)
+            # Find which edge faces the neighbor by checking dot products
+            # The edge whose outward normal best aligns with direction to neighbor
+            best_edge = 0
+            best_dot = -999
+            for i in range(6):
+                v1 = svg_vertices[i]
+                v2 = svg_vertices[(i + 1) % 6]
+                edge_mid_x = (v1[0] + v2[0]) / 2
+                edge_mid_y = (v1[1] + v2[1]) / 2
 
-            # Calculate inward offset for band
-            mx = (x1 + x2) / 2
-            my_mid = (y1 + y2) / 2
-            dx = svg_cx - mx
-            dy = svg_cy - my_mid
-            dist = math.sqrt(dx * dx + dy * dy)
-            if dist > 0:
-                dx /= dist
-                dy /= dist
+                # Outward direction from hex center to edge midpoint
+                out_x = edge_mid_x - svg_cx
+                out_y = edge_mid_y - svg_cy
+                out_len = math.sqrt(out_x * out_x + out_y * out_y)
+                if out_len > 0:
+                    out_x /= out_len
+                    out_y /= out_len
 
-            x1_inner = x1 + dx * band_width
-            y1_inner = y1 + dy * band_width
-            x2_inner = x2 + dx * band_width
-            y2_inner = y2 + dy * band_width
+                # Dot product with direction to neighbor
+                dot = out_x * dir_x + out_y * dir_y
+                if dot > best_dot:
+                    best_dot = dot
+                    best_edge = i
+
+            # Get the edge vertices in SVG coordinates
+            v1 = svg_vertices[best_edge]
+            v2 = svg_vertices[(best_edge + 1) % 6]
+
+            # Calculate inward offset for the shading band (in SVG space)
+            edge_mid_x = (v1[0] + v2[0]) / 2
+            edge_mid_y = (v1[1] + v2[1]) / 2
+            inward_x = svg_cx - edge_mid_x
+            inward_y = svg_cy - edge_mid_y
+            inward_len = math.sqrt(inward_x * inward_x + inward_y * inward_y)
+            if inward_len > 0:
+                inward_x /= inward_len
+                inward_y /= inward_len
+
+            # Scale band_width from world to SVG (approximate - use ratio)
+            # to_svg scales by the same factor for x and y (minus the flip)
+            svg_band_width = band_width  # In meters, same scale as SVG
+
+            v1_inner = (v1[0] + inward_x * svg_band_width, v1[1] + inward_y * svg_band_width)
+            v2_inner = (v2[0] + inward_x * svg_band_width, v2[1] + inward_y * svg_band_width)
+
+            # Calculate opacity based on band difference
+            band_diff = my_band - neighbor_band
+            opacity = min(base_opacity * band_diff, 0.6)
 
             layer_hillside.add(dwg.polygon(
-                points=[(x1, y1), (x2, y2), (x2_inner, y2_inner), (x1_inner, y1_inner)],
+                points=[v1, v2, v2_inner, v1_inner],
                 fill=shade_color,
                 fill_opacity=opacity,
                 stroke='none',
@@ -1927,6 +2046,17 @@ def render_tactical_svg(
         svg_y = (config.max_y - y) + hex_vertex_extend_v + content_offset_m + play_margin_top_m + center_offset_y_m
         return (svg_x, svg_y)
 
+    def svg_to_world(svg_x: float, svg_y: float) -> Tuple[float, float]:
+        """Convert SVG coordinates back to world coordinates (meters).
+
+        This is the inverse of to_svg(). Used for rotation-aware elevation sampling.
+        """
+        # Inverse of: svg_x = (x - config.min_x) + offsets
+        x = svg_x - hex_vertex_extend_h - content_offset_m - play_margin_left_m - center_offset_x_m + config.min_x
+        # Inverse of: svg_y = (config.max_y - y) + offsets
+        y = config.max_y - (svg_y - hex_vertex_extend_v - content_offset_m - play_margin_top_m - center_offset_y_m)
+        return (x, y)
+
     # Create playable area boundary (union of all hex polygons)
     print("  Creating playable area boundary...")
     from shapely.ops import unary_union
@@ -2018,14 +2148,22 @@ def render_tactical_svg(
 
     # Generate hidden game overlay layers (revealed during game map conversion)
     print("  Generating hidden game overlay layers...")
+    # Calculate rotation center in SVG coordinates (center of trim area)
+    rot_center_svg = (content_offset_m + trim_width_m / 2, content_offset_m + trim_height_m / 2)
     layer_game_elevation, layer_game_hillside = generate_game_overlays(
         hexes=hexes,
         grid=grid,
         dwg=dwg,
         to_svg=to_svg,
+        svg_to_world=svg_to_world,
         hex_size_m=HEX_SIZE_M,
         terrain_style='temperate',
-        intensity=1.0
+        intensity=1.0,
+        rotation_deg=config.rotation_deg,
+        rot_center_svg=rot_center_svg,
+        dem=dem,
+        dem_crs=dem.crs if dem else None,
+        grid_crs=GRID_CRS,
     )
 
     # Map terrain types to their layer groups
@@ -3571,9 +3709,6 @@ def render_tactical_svg(
         rotated_content.add(layer_contours_regular)  # Regular contours
         rotated_content.add(layer_contours_index)    # Index contours
         rotated_content.add(layer_contour_labels)    # Contour elevation labels
-        # Game overlay layers (hidden, revealed in game map conversion)
-        rotated_content.add(layer_game_elevation)    # Elevation tinting (hidden)
-        rotated_content.add(layer_game_hillside)     # Hillside shading (hidden)
         rotated_content.add(layer_cliffs)            # Cliffs/embankments
         rotated_content.add(layer_tree_rows)         # Tree rows
         rotated_content.add(layer_barriers)          # Fences/walls
@@ -3605,6 +3740,11 @@ def render_tactical_svg(
         master_group.add(rotated_content)
         # Out-of-play frame stays UNROTATED - clips the rotated content
         master_group.add(layer_out_of_play_frame)
+        # Game overlay layers (hidden, revealed in game map conversion)
+        # These are OUTSIDE rotated_content - aligned with Hex_Grid (flat-top, unrotated)
+        # Elevation values are calculated based on what terrain ends up under each hex AFTER rotation
+        master_group.add(layer_game_elevation)    # Elevation tinting (hidden)
+        master_group.add(layer_game_hillside)     # Hillside shading (hidden)
         # Hex grid stays axis-aligned (unrotated)
         master_group.add(layer_hex_grid)
         master_group.add(layer_hex_markers)

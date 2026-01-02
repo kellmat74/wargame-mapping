@@ -77,7 +77,7 @@ The `game_map_converter.py` transforms detail maps into game-ready maps:
 
 Output folders include version: `{timestamp}_{version}` (e.g., `2026-01-01_15-17_v1.1.0`)
 
-Current version: **v1.1.0** - See `VERSION` constant in `tactical_map.py`
+Current version: **v2.0.0** - See `VERSION` constant in `tactical_map.py`
 
 ## Gathering Context from Previous Sessions
 
@@ -212,18 +212,18 @@ Master_Content
 ├── Rotated_Content (transform="rotate(...)")
 │   ├── Terrain layers (water, forest, urban, etc.)
 │   ├── Contours
-│   ├── Game_Elevation_Overlay (hidden, revealed by game converter)
-│   ├── Game_Hillside_Shading (hidden, revealed by game converter)
 │   ├── Roads, buildings, etc.
 │   └── MGRS_Grid
 ├── Out_Of_Play_Frame (unrotated - clips rotated content)
+├── Game_Elevation_Overlay (hidden, OUTSIDE rotation - aligns with Hex_Grid)
+├── Game_Hillside_Shading (hidden, OUTSIDE rotation - aligns with Hex_Grid)
 ├── Hex_Grid (unrotated - stays axis-aligned)
 ├── Hex_Markers (unrotated)
 ├── Hex_Labels (unrotated)
 └── MGRS_Labels (unrotated)
 ```
 
-**Key insight:** Game overlays MUST be inside `Rotated_Content` to align with terrain. The hex grid stays unrotated so labels remain readable.
+**Key insight (v2.0.0):** Game overlays are OUTSIDE `Rotated_Content` so they align with the unrotated `Hex_Grid`. However, elevation VALUES are sampled from the rotated terrain positions using inverse rotation math. Think of it as a transparency sheet: the hex grid is fixed on the paper, terrain rotates underneath like a transparency, and elevation is sampled based on what terrain "slides into" each hex position after rotation.
 
 ## Known Issues / Limitations
 
@@ -235,7 +235,8 @@ Master_Content
 
 ## Resolved Issues
 
-- **v1.1.0:** Fixed overlay alignment on rotated maps. Overlays are now generated during detail map creation (inside `Rotated_Content`) rather than during game conversion.
+- **v2.0.0:** Fixed overlay alignment on rotated maps (GitHub #21). Overlays are now OUTSIDE `Rotated_Content` (aligned with `Hex_Grid`) but elevation values are sampled from rotated terrain positions using inverse rotation. Hillside shading rewritten with geometric edge detection.
+- **v1.1.0:** Moved overlay generation to detail map creation phase (was in game converter).
 
 ## Testing
 
