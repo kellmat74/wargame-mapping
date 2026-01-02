@@ -502,6 +502,98 @@
         .leaflet-container {
             background: #0d1b2a;
         }
+
+        /* Multi-Map Layout Styles */
+        .layout-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .layout-option {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 15px;
+            border: 2px solid #0f3460;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            min-width: 120px;
+        }
+
+        .layout-option:hover {
+            border-color: #00d4ff;
+            background: rgba(0, 212, 255, 0.05);
+        }
+
+        .layout-option.selected {
+            border-color: #00d4ff;
+            background: rgba(0, 212, 255, 0.1);
+        }
+
+        .layout-option input[type="radio"] {
+            display: none;
+        }
+
+        .layout-diagram {
+            display: flex;
+            gap: 2px;
+            margin-bottom: 10px;
+        }
+
+        .layout-diagram.vertical {
+            flex-direction: column;
+        }
+
+        .layout-diagram.grid-2x2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2px;
+        }
+
+        .map-box {
+            background: #0f3460;
+            border: 1px solid #00d4ff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: #00d4ff;
+            font-size: 12px;
+        }
+
+        .map-box.single {
+            width: 68px;
+            height: 44px;
+        }
+
+        .map-box.half-h {
+            width: 34px;
+            height: 44px;
+        }
+
+        .map-box.half-v {
+            width: 68px;
+            height: 22px;
+        }
+
+        .map-box.quarter {
+            width: 34px;
+            height: 22px;
+        }
+
+        .layout-label {
+            font-size: 12px;
+            color: #fff;
+            font-weight: 600;
+        }
+
+        .layout-size {
+            font-size: 11px;
+            color: #888;
+            margin-top: 3px;
+        }
     </style>
 </head>
 <body>
@@ -516,9 +608,9 @@
         <!-- Instructions -->
         <div class="panel" style="background: #0d2137; border-color: #00d4ff;">
             <h2 style="cursor: pointer;" onclick="toggleInstructions()">
-                📋 Quick Start Guide <span id="instructionsToggle" style="float: right; font-size: 12px;">▼</span>
+                📋 Quick Start Guide <span id="instructionsToggle" style="float: right; font-size: 12px;">▶</span>
             </h2>
-            <div id="instructionsContent">
+            <div id="instructionsContent" style="display: none;">
                 <div style="font-size: 13px; line-height: 1.6; color: #ccc;">
                     <p style="margin: 0 0 15px 0;"><strong style="color: #00d4ff;">Step 1: Configure Your Map</strong></p>
                     <ul style="margin: 0 0 15px 0; padding-left: 20px;">
@@ -556,9 +648,9 @@
             </div>
         </div>
 
-        <!-- Step 1: Map Name -->
+        <!-- Map Name -->
         <div class="panel">
-            <h2>Step 1: Map Name</h2>
+            <h2>Map Name</h2>
             <div class="input-group">
                 <div class="input-field">
                     <label>Map Name</label>
@@ -568,85 +660,19 @@
             </div>
         </div>
 
-        <!-- Step 1: Center Location -->
+        <!-- Center Location -->
         <div class="panel">
-            <h2>Step 1: Center Location</h2>
-            <div class="input-group" style="margin-bottom: 10px;">
+            <h2>Center Location</h2>
+            <div class="input-group">
                 <div class="input-field" style="flex: 2;">
                     <label>Paste Coordinates (auto-detects format)</label>
                     <input type="text" id="coordPaste" placeholder="Decimal, DMS, or MGRS (e.g. 51PTT1234567890)" style="font-family: monospace;">
                     <div class="region-info">Supported: Decimal (24.14, 120.67) | DMS (24°08'51"N 120°40'25"E) | MGRS (51PTT1234567890)</div>
                 </div>
             </div>
-            <div class="input-group">
-                <div class="input-field">
-                    <label>Latitude</label>
-                    <input type="number" id="centerLat" step="0.0001" value="" placeholder="Enter latitude">
-                </div>
-                <div class="input-field">
-                    <label>Longitude</label>
-                    <input type="number" id="centerLon" step="0.0001" value="" placeholder="Enter longitude">
-                </div>
-            </div>
-
-            <!-- Shift Controls (inline) - Map-relative directions -->
-            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #0f3460;">
-                <label style="display: block; margin-bottom: 10px; font-size: 12px; color: #aaa; text-transform: uppercase;">Fine-tune Position (Map-Relative)</label>
-                <div style="display: flex; align-items: center; gap: 20px;">
-                    <div class="shift-controls">
-                        <div class="shift-row">
-                            <button class="shift-btn" onclick="shift('up')" title="Shift up on map">↑</button>
-                        </div>
-                        <div class="shift-row">
-                            <button class="shift-btn" onclick="shift('left')" title="Shift left on map">←</button>
-                            <div class="shift-center">+</div>
-                            <button class="shift-btn" onclick="shift('right')" title="Shift right on map">→</button>
-                        </div>
-                        <div class="shift-row">
-                            <button class="shift-btn" onclick="shift('down')" title="Shift down on map">↓</button>
-                        </div>
-                    </div>
-                    <div class="shift-distance">
-                        <label><input type="radio" name="shiftDist" value="100"> 100m</label>
-                        <label><input type="radio" name="shiftDist" value="300"> 300m</label>
-                        <label><input type="radio" name="shiftDist" value="500" checked> 500m</label>
-                        <label><input type="radio" name="shiftDist" value="1000"> 1km</label>
-                    </div>
-                </div>
-                <div style="font-size: 11px; color: #666; margin-top: 8px;">
-                    Arrows move center relative to rotated map view, not compass directions.<br>
-                    To shift the map left, move the center right →
-                </div>
-            </div>
-        </div>
-
-        <!-- Step 1: Rotation -->
-        <div class="panel">
-            <h2>Step 1: Bearing at Top (Optional)</h2>
-            <div class="rotation-control">
-                <span style="color: #888; font-size: 12px;">0&deg;</span>
-                <input type="range" id="rotationSlider" min="0" max="359" value="0">
-                <span style="color: #888; font-size: 12px;">359&deg;</span>
-                <div class="rotation-value"><span id="rotationValue">0</span>&deg; <span id="rotationDirection" style="color: #888;">(North)</span></div>
-            </div>
-            <div style="text-align: center; margin-top: 10px; font-size: 12px; color: #888;">
-                What compass bearing should point to the top of the map?<br>
-                0° = North, 90° = East, 180° = South, 270° = West
-            </div>
-        </div>
-
-        <!-- Data Region Info -->
-        <div class="panel">
-            <div class="mgrs-display" style="margin-top: 0;">
-                <div class="mgrs-title">Required MGRS Squares for Map Coverage</div>
-                <div class="mgrs-squares" id="mgrsSquares">
-                    <!-- Populated by JS -->
-                </div>
-                <div style="font-size: 11px; color: #888; margin-top: 10px;">
-                    MGRS data is extracted automatically from country PBFs in <code>data/geofabrik/</code>.<br>
-                    To regenerate with new settings, just update the values above and click Generate Map again.
-                </div>
-            </div>
+            <!-- Hidden lat/lon inputs for state management -->
+            <input type="hidden" id="centerLat" value="">
+            <input type="hidden" id="centerLon" value="">
         </div>
 
         <!-- Map Preview -->
@@ -676,9 +702,113 @@
             </div>
         </div>
 
-        <!-- Step 2: Generate -->
+        <!-- Bearing at Top -->
         <div class="panel">
-            <h2>Step 2: Generate</h2>
+            <h2>Bearing at Top</h2>
+            <div class="rotation-control">
+                <input type="range" id="rotationSlider" min="0" max="359" value="0">
+                <span class="rotation-value" id="rotationValue">0</span>°
+                <span id="rotationDirection" style="color: #888; font-size: 14px;">(North)</span>
+            </div>
+            <div class="region-info" style="margin-top: 10px;">
+                0° = North at top, 90° = East at top, 180° = South at top, 270° = West at top
+            </div>
+        </div>
+
+        <!-- Multi-Map Layout -->
+        <div class="panel">
+            <h2>Multi-Map Layout</h2>
+            <div class="multi-map-options">
+                <div class="layout-grid">
+                    <!-- Single Map (default) -->
+                    <label class="layout-option selected" data-count="1" data-orientation="single">
+                        <input type="radio" name="mapLayout" value="single" checked>
+                        <div class="layout-diagram">
+                            <div class="map-box single">A</div>
+                        </div>
+                        <span class="layout-label">Single Map</span>
+                        <span class="layout-size">34" × 22"</span>
+                    </label>
+
+                    <!-- 2 Maps - Short Edge -->
+                    <label class="layout-option" data-count="2" data-orientation="short_edge">
+                        <input type="radio" name="mapLayout" value="2-short">
+                        <div class="layout-diagram">
+                            <div class="map-box half-h">A</div>
+                            <div class="map-box half-h">B</div>
+                        </div>
+                        <span class="layout-label">2 Maps (wide)</span>
+                        <span class="layout-size">68" × 22"</span>
+                    </label>
+
+                    <!-- 2 Maps - Long Edge -->
+                    <label class="layout-option" data-count="2" data-orientation="long_edge">
+                        <input type="radio" name="mapLayout" value="2-long">
+                        <div class="layout-diagram vertical">
+                            <div class="map-box half-v">A</div>
+                            <div class="map-box half-v">B</div>
+                        </div>
+                        <span class="layout-label">2 Maps (tall)</span>
+                        <span class="layout-size">34" × 44"</span>
+                    </label>
+
+                    <!-- 4 Maps - 2x2 Grid -->
+                    <label class="layout-option" data-count="4" data-orientation="grid">
+                        <input type="radio" name="mapLayout" value="4-grid">
+                        <div class="layout-diagram grid-2x2">
+                            <div class="map-box quarter">A</div>
+                            <div class="map-box quarter">B</div>
+                            <div class="map-box quarter">C</div>
+                            <div class="map-box quarter">D</div>
+                        </div>
+                        <span class="layout-label">4 Maps (2×2)</span>
+                        <span class="layout-size">68" × 44"</span>
+                    </label>
+                </div>
+            </div>
+            <div class="region-info" style="margin-top: 10px;">
+                Multi-map layouts share hex edges for seamless tabletop play. Center point is the center of all maps combined.
+            </div>
+        </div>
+
+        <!-- Fine-Tune Position -->
+        <div class="panel">
+            <h2>Fine-Tune Position</h2>
+            <div class="shift-controls">
+                <div class="shift-row">
+                    <button class="shift-btn" onclick="shift('up')">↑</button>
+                </div>
+                <div class="shift-row">
+                    <button class="shift-btn" onclick="shift('left')">←</button>
+                    <div class="shift-center">⊕</div>
+                    <button class="shift-btn" onclick="shift('right')">→</button>
+                </div>
+                <div class="shift-row">
+                    <button class="shift-btn" onclick="shift('down')">↓</button>
+                </div>
+            </div>
+            <div class="shift-distance">
+                <label><input type="radio" name="shiftDist" value="100"> 100m</label>
+                <label><input type="radio" name="shiftDist" value="500"> 500m</label>
+                <label><input type="radio" name="shiftDist" value="1000" checked> 1km</label>
+                <label><input type="radio" name="shiftDist" value="5000"> 5km</label>
+            </div>
+            <div class="region-info" style="margin-top: 10px;">
+                Shifts are relative to map orientation (up = toward top of map)
+            </div>
+        </div>
+
+        <!-- Required MGRS Squares -->
+        <div class="panel">
+            <h2>Required MGRS Squares</h2>
+            <div id="mgrsSquares" class="mgrs-squares">
+                <div style="color: #888; font-style: italic;">Enter coordinates to see required MGRS squares</div>
+            </div>
+        </div>
+
+        <!-- Generate -->
+        <div class="panel">
+            <h2>Generate</h2>
             <div class="button-row">
                 <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
                 <button class="btn btn-success" id="generateBtn" onclick="generateMap()">Generate Map</button>
@@ -814,12 +944,12 @@
             </div>
         </div>
 
-        <!-- Current Configuration (collapsible) -->
+        <!-- Current Configuration (collapsible, expanded by default) -->
         <div class="panel">
             <h2 style="cursor: pointer;" onclick="toggleConfig()">
-                Current Configuration <span id="configToggle" style="float: right; font-size: 12px;">▶</span>
+                Current Configuration <span id="configToggle" style="float: right; font-size: 12px;">▼</span>
             </h2>
-            <div class="config-display" id="configDisplay" style="display: none;">
+            <div class="config-display" id="configDisplay" style="display: block;">
                 <!-- Populated by JS -->
             </div>
             <div class="command-wrapper" style="margin-top: 15px; display: none;" id="commandWrapper">
@@ -1333,7 +1463,13 @@
             mapShiftUp: 0,      // Map-relative shift tracking (for notes)
             mapShiftRight: 0,
             requiredSquares: [],
-            availableRegions: []
+            availableRegions: [],
+            // Multi-map settings
+            multiMap: {
+                enabled: false,
+                count: 1,           // 1, 2, 3, or 4 maps
+                orientation: 'short_edge'  // 'short_edge' or 'long_edge' (for 2-3 maps)
+            }
         };
 
         // Helper to convert bearing to direction name
@@ -1472,9 +1608,15 @@
                 ? `${state.centerLat.toFixed(6)}&deg;N, ${state.centerLon.toFixed(6)}&deg;E`
                 : '<span style="color: #888; font-style: italic;">Not set - enter coordinates above</span>';
 
+            // Multi-map display
+            const multiMapDisplay = state.multiMap.enabled
+                ? `${state.multiMap.count} maps (${state.multiMap.orientation.replace('_', ' ')})`
+                : 'Single map';
+
             display.innerHTML = `
 <span class="label">Center:</span> <span class="value coords">${centerDisplay}</span>
 <span class="label">Bearing at Top:</span> <span class="value">${bearingDisplay}</span>
+<span class="label">Layout:</span> <span class="value">${multiMapDisplay}</span>
 <span class="label">Region:</span> <span class="value">${effectiveRegion}</span>
 <span class="label">Map Name:</span> <span class="value">${state.mapName || '<span style="color: #888;">Not set</span>'}</span>${shiftInfo}
             `.trim();
@@ -1582,6 +1724,16 @@
                 rotation_deg: bearingToRotation(state.bearingAtTop)
             };
 
+            // Add multi-map settings if enabled
+            if (state.multiMap.enabled) {
+                config.multi_map = {
+                    enabled: true,
+                    count: state.multiMap.count,
+                    orientation: state.multiMap.orientation,
+                    overlap_hexes: 1  // Default: 1 shared column/row of hexes
+                };
+            }
+
             // Add adjustment notes if any map-relative shifts were made
             if (state.mapShiftUp !== 0 || state.mapShiftRight !== 0) {
                 const parts = [];
@@ -1654,6 +1806,11 @@ config = MapConfig(
             state.shiftEast = 0;
             state.mapShiftUp = 0;
             state.mapShiftRight = 0;
+            state.multiMap = {
+                enabled: false,
+                count: 1,
+                orientation: 'short_edge'
+            };
 
             document.getElementById('coordPaste').value = '';
             document.getElementById('centerLat').value = '';
@@ -1663,10 +1820,16 @@ config = MapConfig(
             document.getElementById('rotationDirection').textContent = '(North)';
             document.getElementById('mapName').value = state.mapName;
 
+            // Reset multi-map layout selection
+            document.querySelectorAll('.layout-option').forEach(o => o.classList.remove('selected'));
+            document.querySelector('.layout-option[data-count="1"]').classList.add('selected');
+            document.querySelector('input[name="mapLayout"][value="single"]').checked = true;
+
             document.getElementById('commandOutput').classList.remove('visible');
             document.getElementById('copyBtn').style.display = 'none';
 
             updateDisplay();
+            updatePreviewBoundary();
             showStatus('Reset to defaults', 'info');
         }
 
@@ -1762,6 +1925,16 @@ config = MapConfig(
                 region: effectiveRegion,
                 rotation_deg: bearingToRotation(state.bearingAtTop)
             };
+
+            // Add multi-map settings if enabled
+            if (state.multiMap.enabled) {
+                config.multi_map = {
+                    enabled: true,
+                    count: state.multiMap.count,
+                    orientation: state.multiMap.orientation,
+                    overlap_hexes: 1
+                };
+            }
 
             // Show progress container
             const progressContainer = document.getElementById('progressContainer');
@@ -1959,6 +2132,27 @@ config = MapConfig(
                 updateDisplay();
             });
 
+            // Multi-map layout selection
+            document.querySelectorAll('.layout-option').forEach(option => {
+                option.addEventListener('click', () => {
+                    // Update selected state
+                    document.querySelectorAll('.layout-option').forEach(o => o.classList.remove('selected'));
+                    option.classList.add('selected');
+                    option.querySelector('input').checked = true;
+
+                    // Update state
+                    const count = parseInt(option.dataset.count);
+                    const orientation = option.dataset.orientation;
+
+                    state.multiMap.enabled = count > 1;
+                    state.multiMap.count = count;
+                    state.multiMap.orientation = orientation;
+
+                    updateDisplay();
+                    updatePreviewBoundary();
+                });
+            });
+
             updateDisplay();
 
             // Check if server is running
@@ -2090,44 +2284,44 @@ config = MapConfig(
                 fillOpacity: 0.1
             }).addTo(previewMap);
 
-            // Create orientation arrow pointing to top of map
-            // Arrow is placed at the top center of the boundary, pointing outward
+            // Create orientation arrow inside boundary pointing toward top of map
             // For multi-map, this will be replaced with map labels (A, B, C, D)
             if (orientationArrow) {
                 previewMap.removeLayer(orientationArrow);
             }
 
-            // Calculate arrow position - at top center of boundary, pointing outward
-            const arrowDistance = halfHeight + 200; // Just beyond top edge (meters)
-            const arrowLength = 500;   // Arrow length (meters)
+            // Arrow sits inside the boundary, pointing toward the top edge
+            const arrowLength = 600;   // Arrow length (meters)
             const arrowWidth = 400;    // Arrow width at base (meters)
+            const arrowOffset = halfHeight - arrowLength - 200; // Position inside, near top
 
             // Arrow points toward "top" of map (in direction of bearingAtTop)
-            const arrowAngleRad = -state.bearingAtTop * Math.PI / 180;
+            // Positive bearing = clockwise rotation
+            const arrowAngleRad = state.bearingAtTop * Math.PI / 180;
 
-            // Arrow tip position (beyond the top edge)
-            const tipDx = (arrowDistance + arrowLength) * Math.sin(arrowAngleRad);
-            const tipDy = (arrowDistance + arrowLength) * Math.cos(arrowAngleRad);
+            // Arrow tip position (toward top edge)
+            const tipDx = (arrowOffset + arrowLength) * Math.sin(arrowAngleRad);
+            const tipDy = (arrowOffset + arrowLength) * Math.cos(arrowAngleRad);
 
-            // Arrow base corners (perpendicular to arrow direction)
-            const baseCenterDx = arrowDistance * Math.sin(arrowAngleRad);
-            const baseCenterDy = arrowDistance * Math.cos(arrowAngleRad);
+            // Arrow base center
+            const baseCenterDx = arrowOffset * Math.sin(arrowAngleRad);
+            const baseCenterDy = arrowOffset * Math.cos(arrowAngleRad);
 
             // Perpendicular offset for arrow base width
             const perpAngle = arrowAngleRad + Math.PI / 2;
-            const halfWidth = arrowWidth / 2;
+            const arrowHalfWidth = arrowWidth / 2;
             const baseLeft = {
-                dx: baseCenterDx + halfWidth * Math.sin(perpAngle),
-                dy: baseCenterDy + halfWidth * Math.cos(perpAngle)
+                dx: baseCenterDx + arrowHalfWidth * Math.sin(perpAngle),
+                dy: baseCenterDy + arrowHalfWidth * Math.cos(perpAngle)
             };
             const baseRight = {
-                dx: baseCenterDx - halfWidth * Math.sin(perpAngle),
-                dy: baseCenterDy - halfWidth * Math.cos(perpAngle)
+                dx: baseCenterDx - arrowHalfWidth * Math.sin(perpAngle),
+                dy: baseCenterDy - arrowHalfWidth * Math.cos(perpAngle)
             };
 
             // Convert to lat/lon
             const arrowPoints = [
-                // Tip
+                // Tip (pointing toward top)
                 [
                     state.centerLat + tipDy / METERS_PER_DEG_LAT,
                     state.centerLon + tipDx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180))
