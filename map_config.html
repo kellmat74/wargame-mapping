@@ -2290,28 +2290,47 @@ config = MapConfig(
             const halfWidth = widthM / 2;
             const halfHeight = heightM / 2;
 
-            // Corner offsets in meters (relative to center, unrotated)
-            const corners = [
+            // Corner offsets in meters (relative to sheet center, unrotated)
+            const sheetCorners = [
                 { dx: -halfWidth, dy: halfHeight },   // Top-left
                 { dx: halfWidth, dy: halfHeight },    // Top-right
                 { dx: halfWidth, dy: -halfHeight },   // Bottom-right
                 { dx: -halfWidth, dy: -halfHeight }   // Bottom-left
             ];
 
-            // Apply rotation
+            // Rotation angle (for rotating around cluster center)
             const rotationRad = -state.bearingAtTop * Math.PI / 180;
-            const rotatedCorners = corners.map(c => {
-                const dx = c.dx * Math.cos(rotationRad) - c.dy * Math.sin(rotationRad);
-                const dy = c.dx * Math.sin(rotationRad) + c.dy * Math.cos(rotationRad);
-                return { dx, dy };
-            });
+            const cosR = Math.cos(rotationRad);
+            const sinR = Math.sin(rotationRad);
+
+            // Get unrotated sheet positions relative to cluster center
+            const overlapHexes = state.multiMap.overlapHexes || 1;
+            const unrotatedPositions = getUnrotatedSheetPositions(
+                state.multiMap.count,
+                state.multiMap.orientation,
+                widthM, heightM,
+                overlapHexes
+            );
 
             // Create boundary polygon for each sheet
             let allBounds = null;
             sheetCenters.forEach((sheet, index) => {
-                const cornerLatLngs = rotatedCorners.map(c => {
-                    const lat = sheet.lat + (c.dy / METERS_PER_DEG_LAT);
-                    const lon = sheet.lon + (c.dx / (METERS_PER_DEG_LON * Math.cos(sheet.lat * Math.PI / 180)));
+                // Get the unrotated position for this sheet
+                const unrotatedPos = unrotatedPositions[index] || { dx: 0, dy: 0 };
+
+                // Calculate corners relative to cluster center, then rotate around cluster center
+                const cornerLatLngs = sheetCorners.map(c => {
+                    // Corner position relative to cluster center (unrotated)
+                    const cornerDx = unrotatedPos.dx + c.dx;
+                    const cornerDy = unrotatedPos.dy + c.dy;
+
+                    // Rotate around cluster center
+                    const rotatedDx = cornerDx * cosR - cornerDy * sinR;
+                    const rotatedDy = cornerDx * sinR + cornerDy * cosR;
+
+                    // Convert to lat/lon from cluster center
+                    const lat = state.centerLat + (rotatedDy / METERS_PER_DEG_LAT);
+                    const lon = state.centerLon + (rotatedDx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180)));
                     return [lat, lon];
                 });
 
@@ -2330,9 +2349,17 @@ config = MapConfig(
                     allBounds.extend(polygon.getBounds());
                 }
 
-                // Add sheet label for multi-map
+                // Add sheet label for multi-map (at center of rotated sheet)
                 if (state.multiMap.enabled && state.multiMap.count > 1) {
-                    const label = L.marker([sheet.lat, sheet.lon], {
+                    // Calculate label position using same rotation as polygon
+                    const labelDx = unrotatedPos.dx;
+                    const labelDy = unrotatedPos.dy;
+                    const rotatedLabelDx = labelDx * cosR - labelDy * sinR;
+                    const rotatedLabelDy = labelDx * sinR + labelDy * cosR;
+                    const labelLat = state.centerLat + (rotatedLabelDy / METERS_PER_DEG_LAT);
+                    const labelLon = state.centerLon + (rotatedLabelDx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180)));
+
+                    const label = L.marker([labelLat, labelLon], {
                         icon: L.divIcon({
                             className: 'sheet-label-icon',
                             html: `<div class="sheet-label">${sheet.name}</div>`,
@@ -2411,16 +2438,15 @@ config = MapConfig(
             // Update statistics - calculate total coverage for multi-map
             let totalWidthM = widthM;
             let totalHeightM = heightM;
-            const overlapHexes = 1;
 
             if (state.multiMap.enabled && state.multiMap.count > 1) {
                 if (state.multiMap.orientation === 'short_edge') {
-                    totalWidthM = widthM * 2 - (overlapHexes * colSpacing);
+                    totalWidthM = widthM * 2 - (1 * colSpacing);
                 } else if (state.multiMap.orientation === 'long_edge') {
-                    totalHeightM = heightM * 2 - (overlapHexes * rowSpacing);
+                    totalHeightM = heightM * 2 - (1 * rowSpacing);
                 } else if (state.multiMap.orientation === 'grid') {
-                    totalWidthM = widthM * 2 - (overlapHexes * colSpacing);
-                    totalHeightM = heightM * 2 - (overlapHexes * rowSpacing);
+                    totalWidthM = widthM * 2 - (1 * colSpacing);
+                    totalHeightM = heightM * 2 - (1 * rowSpacing);
                 }
             }
 
@@ -2433,6 +2459,42 @@ config = MapConfig(
                 ? '0° (North up)'
                 : `${state.bearingAtTop}° (${bearingToDirection(state.bearingAtTop)} up)`;
             document.getElementById('statRotation').textContent = rotationDisplay;
+        }
+
+        /**
+         * Get unrotated sheet positions relative to cluster center.
+         * Used for preview rendering where we need to rotate corners around cluster center.
+         */
+        function getUnrotatedSheetPositions(count, orientation, widthM, heightM, overlapHexes) {
+            if (count === 1 || orientation === 'single') {
+                return [{ dx: 0, dy: 0 }];
+            }
+
+            const size = HEX_SIZE_M / Math.sqrt(3);
+            const colSpacing = 1.5 * size;
+            const rowSpacing = HEX_SIZE_M;
+            const xOffset = widthM - (overlapHexes * colSpacing);
+            const yOffset = heightM - (overlapHexes * rowSpacing);
+
+            if (orientation === 'short_edge' && count === 2) {
+                return [
+                    { dx: -xOffset / 2, dy: 0 },
+                    { dx: +xOffset / 2, dy: 0 }
+                ];
+            } else if (orientation === 'long_edge' && count === 2) {
+                return [
+                    { dx: 0, dy: +yOffset / 2 },
+                    { dx: 0, dy: -yOffset / 2 }
+                ];
+            } else if (orientation === 'grid' && count === 4) {
+                return [
+                    { dx: -xOffset / 2, dy: +yOffset / 2 },
+                    { dx: +xOffset / 2, dy: +yOffset / 2 },
+                    { dx: -xOffset / 2, dy: -yOffset / 2 },
+                    { dx: +xOffset / 2, dy: -yOffset / 2 }
+                ];
+            }
+            return [{ dx: 0, dy: 0 }];
         }
 
         /**

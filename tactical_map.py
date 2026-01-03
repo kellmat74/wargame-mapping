@@ -49,7 +49,7 @@ GEOFABRIK_DIR = DATA_DIR / "geofabrik"
 DEFAULTS_FILE = Path("map_defaults.json")
 
 # === Version ===
-VERSION = "v2.1.1"
+VERSION = "v2.1.2"
 
 
 def load_map_defaults() -> dict:
@@ -756,6 +756,46 @@ def scan_sheet_elevation(config: MapConfig) -> Optional[float]:
         return None
 
 
+def get_shared_edges(sheet_name: str, orientation: str, count: int) -> list:
+    """
+    Determine which edges of a sheet are shared with adjacent sheets.
+
+    Args:
+        sheet_name: Sheet identifier ('A', 'B', 'C', 'D')
+        orientation: Layout type ('short_edge', 'long_edge', 'grid')
+        count: Number of sheets (2 or 4)
+
+    Returns:
+        List of shared edge names: 'left', 'right', 'top', 'bottom'
+    """
+    if count == 1:
+        return []
+
+    if orientation == 'short_edge' and count == 2:
+        # 2-wide: A on left, B on right
+        if sheet_name == 'A':
+            return ['right']
+        elif sheet_name == 'B':
+            return ['left']
+    elif orientation == 'long_edge' and count == 2:
+        # 2-tall: A on top, B on bottom
+        if sheet_name == 'A':
+            return ['bottom']
+        elif sheet_name == 'B':
+            return ['top']
+    elif orientation == 'grid' and count == 4:
+        # 2x2 grid: A=NW, B=NE, C=SW, D=SE
+        edges = {
+            'A': ['right', 'bottom'],
+            'B': ['left', 'bottom'],
+            'C': ['right', 'top'],
+            'D': ['left', 'top'],
+        }
+        return edges.get(sheet_name, [])
+
+    return []
+
+
 def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
     """
     Generate multiple adjacent map sheets as a cluster.
@@ -830,6 +870,11 @@ def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
         print(f"Generating Sheet {sheet_name} ({i+1}/{len(sheet_centers)})")
         print(f"{'='*60}")
 
+        # Determine which edges are shared with adjacent sheets
+        shared_edges = get_shared_edges(sheet_name, orientation, count)
+        if shared_edges:
+            print(f"Shared edges: {', '.join(shared_edges)}")
+
         # Create config for this sheet
         # Use the same region and rotation as base config
         sheet_config = MapConfig(
@@ -842,11 +887,12 @@ def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
             timestamp=base_config.timestamp,  # Use same timestamp for cluster
         )
 
-        # Generate this sheet with cluster-wide elevation base
+        # Generate this sheet with cluster-wide elevation base and shared edge info
         output_path = generate_single_sheet(
             sheet_config,
             base_config.output_path,
-            cluster_min_elevation=cluster_min_elevation
+            cluster_min_elevation=cluster_min_elevation,
+            shared_edges=shared_edges
         )
 
         if output_path:
@@ -919,7 +965,8 @@ def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
 def generate_single_sheet(
     config: MapConfig,
     output_dir: Path = None,
-    cluster_min_elevation: float = None
+    cluster_min_elevation: float = None,
+    shared_edges: list = None
 ) -> Optional[Path]:
     """
     Generate a single map sheet.
@@ -934,10 +981,14 @@ def generate_single_sheet(
             When provided, elevation bands are calculated relative to this value
             instead of the sheet's local minimum, ensuring consistent banding
             across multi-map clusters.
+        shared_edges: List of edges shared with adjacent sheets ('left', 'right', 'top', 'bottom').
+            On shared edges, the out-of-play frame is hidden and elevation overlay is extended.
 
     Returns:
         Path to generated SVG, or None if generation failed
     """
+    if shared_edges is None:
+        shared_edges = []
     # Use provided output_dir or config's default
     if output_dir:
         actual_output = output_dir
@@ -1055,7 +1106,7 @@ def generate_single_sheet(
     fuel_infrastructure = load_optional_features(config, "fuel_infrastructure.geojson", "fuel_infrastructure")
 
     # Download reference tiles
-    reference_tiles = download_highres_reference_tiles(config)
+    reference_tiles = download_highres_reference_tiles(config, output_dir=actual_output)
     if reference_tiles is None:
         reference_tiles = load_reference_tile_info(config)
 
@@ -1082,7 +1133,7 @@ def generate_single_sheet(
 
     # Render SVG
     svg_path = actual_output / f"{config.name}_tactical.svg"
-    render_tactical_svg(grid, hexes, contours, roads, buildings, landcover, mgrs_grid, config, svg_path, enhanced_features, dem, cluster_min_elevation)
+    render_tactical_svg(grid, hexes, contours, roads, buildings, landcover, mgrs_grid, config, svg_path, enhanced_features, dem, cluster_min_elevation, shared_edges)
 
     # Save hex data
     json_path = actual_output / f"{config.name}_hexdata.json"
@@ -1544,6 +1595,9 @@ def generate_game_overlays(
     For rotated maps, the elevation VALUES are sampled from the terrain position
     that will appear under each hex after the terrain rotates.
 
+    Overlay is extended 2 hexes beyond the playable area on all edges to support
+    multi-map layouts where the out-of-play frame is hidden on shared edges.
+
     Args:
         hexes: List of TacticalHex objects with elevation_avg
         grid: TacticalHexGrid for coordinate conversion
@@ -1647,6 +1701,43 @@ def generate_game_overlays(
             band = min(band, ELEVATION_BAND_MAX)
             elevation_bands[(h.q, h.r)] = band
 
+    # === Extend overlay beyond playable area ===
+    # Add 2 extra hex rows/columns on all edges to support multi-map layouts
+    # where the out-of-play frame is hidden on shared edges.
+    # Extra hexes copy elevation from nearest edge hex.
+    extension_hexes = 2
+    q_min = min(h.q for h in hexes)
+    q_max = max(h.q for h in hexes)
+    r_min = min(h.r for h in hexes)
+    r_max = max(h.r for h in hexes)
+
+    extra_positions = []
+    # Left edge extension (q < q_min)
+    for dq in range(1, extension_hexes + 1):
+        for r in range(r_min - extension_hexes, r_max + extension_hexes + 1):
+            extra_positions.append((q_min - dq, r, q_min, r))  # (new_q, new_r, source_q, source_r)
+    # Right edge extension (q > q_max)
+    for dq in range(1, extension_hexes + 1):
+        for r in range(r_min - extension_hexes, r_max + extension_hexes + 1):
+            extra_positions.append((q_max + dq, r, q_max, r))
+    # Top edge extension (r < r_min)
+    for dr in range(1, extension_hexes + 1):
+        for q in range(q_min, q_max + 1):
+            extra_positions.append((q, r_min - dr, q, r_min))
+    # Bottom edge extension (r > r_max)
+    for dr in range(1, extension_hexes + 1):
+        for q in range(q_min, q_max + 1):
+            extra_positions.append((q, r_max + dr, q, r_max))
+
+    # Add extra positions to elevation_bands, copying from nearest edge hex
+    for new_q, new_r, src_q, src_r in extra_positions:
+        if (new_q, new_r) not in elevation_bands:
+            # Clamp source to valid range
+            src_q = max(q_min, min(q_max, src_q))
+            src_r = max(r_min, min(r_max, src_r))
+            source_band = elevation_bands.get((src_q, src_r), 0)
+            elevation_bands[(new_q, new_r)] = source_band
+
     # Calculate hex geometry
     size = hex_size_m / math.sqrt(3)  # Center to vertex
 
@@ -1655,15 +1746,15 @@ def generate_game_overlays(
     layer_hillside = dwg.g(id="Game_Hillside_Shading")
 
     # === Generate Elevation Overlay ===
+    # Iterate over all positions in elevation_bands (includes extended edge hexes)
     overlay_count = 0
-    for h in hexes:
-        band = elevation_bands.get((h.q, h.r), 0)
+    for (q, r), band in elevation_bands.items():
         opacity = ELEVATION_TINT_OPACITY.get(band, 0) * intensity
         if opacity <= 0:
             continue
 
         # Get hex center in world coordinates
-        cx, cy = grid.axial_to_world(h.q, h.r)
+        cx, cy = grid.axial_to_world(q, r)
 
         # Calculate hex polygon vertices in WORLD coordinates first,
         # then apply to_svg() to each vertex. This ensures the Y-axis
@@ -1684,25 +1775,25 @@ def generate_game_overlays(
         ))
         overlay_count += 1
 
-    print(f"    Created {overlay_count} elevation overlay polygons (hidden)")
+    print(f"    Created {overlay_count} elevation overlay polygons (includes edge extensions)")
 
     # === Generate Hillside Shading ===
     # Rewritten from scratch: for each hex, check each neighbor. If neighbor
     # is in a lower elevation band, shade the edge facing that neighbor.
     # Edge detection is done geometrically in SVG space to avoid coordinate
     # system confusion.
+    # Iterates over all positions including extended edge hexes.
     band_width = size * 0.15  # 15% of center-to-vertex distance
     shade_color = HILLSIDE_COLORS.get(terrain_style, HILLSIDE_COLORS['temperate'])
     base_opacity = 1.0 * intensity
 
     shading_count = 0
-    for h in hexes:
-        my_band = elevation_bands.get((h.q, h.r), 0)
+    for (q, r), my_band in elevation_bands.items():
         if my_band == 0:
             continue  # Lowest band - no neighbors can be lower
 
         # Get hex center in both coordinate systems
-        world_cx, world_cy = grid.axial_to_world(h.q, h.r)
+        world_cx, world_cy = grid.axial_to_world(q, r)
         svg_cx, svg_cy = to_svg(world_cx, world_cy)
 
         # Precompute hex vertices in SVG coordinates
@@ -1714,7 +1805,7 @@ def generate_game_overlays(
             svg_vx, svg_vy = to_svg(world_vx, world_vy)
             svg_vertices.append((svg_vx, svg_vy))
 
-        neighbors = get_hex_neighbors(h.q, h.r)
+        neighbors = get_hex_neighbors(q, r)
         for nq, nr in neighbors:
             neighbor_band = elevation_bands.get((nq, nr))
 
@@ -2177,12 +2268,13 @@ def load_reference_tile_info(config: MapConfig) -> dict:
     return tile_info
 
 
-def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15) -> dict:
+def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15, output_dir: Path = None) -> dict:
     """Download high-resolution reference tiles for the specific map area.
 
     Args:
         config: MapConfig with calculated bounds
         zoom: Tile zoom level (15 = ~4.7m/pixel, max for OpenTopoMap outside Europe)
+        output_dir: Optional output directory (defaults to config.output_path)
 
     Returns:
         Tile info dict with embedded base64 image, or None if download fails
@@ -2198,11 +2290,12 @@ def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15) -> dic
         print("  requests or PIL not available, skipping high-res tiles")
         return None
 
-    # Create output directory if needed
-    config.output_path.mkdir(parents=True, exist_ok=True)
+    # Use provided output_dir or config's default
+    actual_output = output_dir if output_dir else config.output_path
+    actual_output.mkdir(parents=True, exist_ok=True)
 
-    output_image = config.output_path / f"{config.name}_reference_highres.png"
-    output_info = config.output_path / f"{config.name}_reference_highres.json"
+    output_image = actual_output / f"{config.name}_reference_highres.png"
+    output_info = actual_output / f"{config.name}_reference_highres.json"
 
     # Transform map bounds from UTM to WGS84 to check coverage
     transformer = Transformer.from_crs(GRID_CRS, WGS84, always_xy=True)
@@ -2262,7 +2355,7 @@ def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15) -> dic
     # Reduce zoom if too many tiles
     if num_tiles > 400:
         print(f"    Too many tiles, reducing zoom level to {zoom - 1}")
-        return download_highres_reference_tiles(config, zoom - 1)
+        return download_highres_reference_tiles(config, zoom - 1, actual_output)
 
     # Download tiles from OpenTopoMap
     tiles = {}
@@ -2301,7 +2394,7 @@ def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15) -> dic
     # If most tiles are 404, try lower zoom (coverage doesn't exist at this zoom)
     if not_found > num_tiles * 0.5 and zoom > 12:
         print(f"    {not_found}/{num_tiles} tiles not found, trying zoom {zoom - 1}...")
-        return download_highres_reference_tiles(config, zoom - 1)
+        return download_highres_reference_tiles(config, zoom - 1, actual_output)
 
     print(f"    Downloaded {downloaded}/{num_tiles} tiles")
 
@@ -2415,8 +2508,11 @@ def render_tactical_svg(
     enhanced_features: dict = None,
     dem: rasterio.DatasetReader = None,
     cluster_min_elevation: float = None,
+    shared_edges: list = None,
 ) -> None:
     """Render tactical map to SVG with 1 SVG unit = 1 meter."""
+    if shared_edges is None:
+        shared_edges = []
     print("\nRendering SVG...")
 
     # === NEW LAYOUT: Fixed 34" x 22" trim with data elements outside bleed ===
@@ -2666,7 +2762,7 @@ def render_tactical_svg(
     layer_heath = dwg.g(id="Heath")
     layer_rocky = dwg.g(id="Rocky_Terrain")
     layer_sand = dwg.g(id="Sand")
-    layer_military = dwg.g(id="Military")
+    layer_military = dwg.g(id="Military", visibility="hidden")
     layer_quarries = dwg.g(id="Quarries")
     layer_cemeteries = dwg.g(id="Cemeteries")
     layer_airfields = dwg.g(id="Airfields")
@@ -3578,6 +3674,8 @@ def render_tactical_svg(
     # Layer 6: Out-of-play frame (masks everything outside hex grid)
     # This frame stays UNROTATED - masks partial hexes and artifacts
     print("  Creating out-of-play frame...")
+    if shared_edges:
+        print(f"    Hiding frame on shared edges: {', '.join(shared_edges)}")
 
     # Create SVG boundary rectangle covering entire document including bleed
     svg_boundary = box(-10, -10, viewbox_width_with_bleed + 10, viewbox_height_with_bleed + 10)
@@ -3592,6 +3690,29 @@ def render_tactical_svg(
             Polygon([to_svg(x, y) for x, y in p.exterior.coords])
             for p in playable_area.geoms
         ])
+
+    # For multi-map sheets, extend playable area on shared edges to hide the frame there
+    # This allows adjacent sheets to overlap seamlessly
+    if shared_edges:
+        extension_amount = 500  # Extend well beyond document edge
+        bounds = playable_svg_poly.bounds  # (minx, miny, maxx, maxy)
+        extensions = []
+
+        if 'left' in shared_edges:
+            # Extend left edge beyond document
+            extensions.append(box(-extension_amount, bounds[1], bounds[0], bounds[3]))
+        if 'right' in shared_edges:
+            # Extend right edge beyond document
+            extensions.append(box(bounds[2], bounds[1], viewbox_width_with_bleed + extension_amount, bounds[3]))
+        if 'top' in shared_edges:
+            # In SVG, Y increases downward, so "top" of map is smaller Y values
+            extensions.append(box(bounds[0], -extension_amount, bounds[2], bounds[1]))
+        if 'bottom' in shared_edges:
+            # "Bottom" of map is larger Y values
+            extensions.append(box(bounds[0], bounds[3], bounds[2], viewbox_height_with_bleed + extension_amount))
+
+        if extensions:
+            playable_svg_poly = unary_union([playable_svg_poly] + extensions)
 
     # Create frame by subtracting playable hex area from SVG boundary
     frame_poly = svg_boundary.difference(playable_svg_poly)

@@ -21,6 +21,12 @@ Several debug scripts were created during contour/rotation troubleshooting. Cons
 
 ## Feature Enhancements
 
+### Multi-Map Out-of-Play Frame ✓ IMPLEMENTED (v2.1.2)
+- Out-of-play frame now hidden on shared edges for multi-map clusters
+- Elevation overlay extended 2 hexes beyond playable area on ALL edges
+- Non-shared edges: frame masks the extension (no visible change)
+- Shared edges: extension provides seamless overlay coverage when sheets overlap
+
 ### Hex Spine Style
 - Current `HEX_SPINE_LENGTH = 0.18` (18% of edge) - may need tuning after visual review
 - Could make spine length configurable via map_defaults.json

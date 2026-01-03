@@ -775,6 +775,30 @@ def modify_existing_frame_color(tree: ET.ElementTree, color: str = None) -> bool
     return False
 
 
+def hide_out_of_play_frame(tree: ET.ElementTree) -> bool:
+    """
+    Hide the Out_Of_Play_Frame layer entirely (for multi-map clusters).
+
+    Args:
+        tree: SVG ElementTree to modify in place
+
+    Returns:
+        True if frame was found and hidden, False otherwise
+    """
+    root = tree.getroot()
+
+    # Find Out_Of_Play_Frame group
+    for elem in root.iter():
+        elem_id = elem.get('id', '')
+        if elem_id == 'Out_Of_Play_Frame':
+            elem.set('visibility', 'hidden')
+            print("  Hidden Out_Of_Play_Frame (multi-map cluster)")
+            return True
+
+    print("  Warning: Out_Of_Play_Frame not found")
+    return False
+
+
 def hide_original_hex_labels(tree: ET.ElementTree) -> None:
     """
     Hide the original Hex_Labels layer by setting display:none.
@@ -796,13 +820,13 @@ def hide_detail_layers(tree: ET.ElementTree) -> None:
     """
     Hide detail layers that are too fine for game maps.
 
-    Hides: Paths, Powerlines, Tree_Rows, Barriers
+    Hides: Paths, Powerlines, Tree_Rows, Barriers, Military
 
     Args:
         tree: SVG ElementTree to modify in place
     """
     root = tree.getroot()
-    layers_to_hide = ['Paths', 'Powerlines', 'Tree_Rows', 'Barriers']
+    layers_to_hide = ['Paths', 'Powerlines', 'Tree_Rows', 'Barriers', 'Military']
     hidden_count = 0
 
     for elem in root.iter():
@@ -1171,43 +1195,26 @@ def diagnose_hex_alignment(tree: ET.ElementTree, hex_data: dict, sample_count: i
     print("\n" + "=" * 60)
 
 
-def convert_to_game_map(
-    detailed_map_dir: Path,
-    config: dict = None
+def convert_single_sheet(
+    svg_path: Path,
+    json_path: Path,
+    output_dir: Path,
+    config: dict,
+    is_multi_map: bool = False
 ) -> Path:
     """
-    Convert a detailed tactical map to a game-ready map.
+    Convert a single detailed tactical map sheet to a game-ready map.
 
     Args:
-        detailed_map_dir: Path to detailed map folder (contains SVG and hexdata.json)
-        config: Optional configuration dict with:
-            - terrain_style: 'auto', 'temperate', or 'arid'
-            - elevation_intensity: float multiplier (default 1.0)
-            - frame_color: hex color string
-            - label_rows: list of row numbers to label
+        svg_path: Path to the tactical SVG file
+        json_path: Path to the hexdata JSON file
+        output_dir: Output directory for game map files
+        config: Configuration dict
+        is_multi_map: Whether this sheet is part of a multi-map cluster
 
     Returns:
-        Path to output game_map folder
+        Path to output SVG file
     """
-    config = config or {}
-
-    print(f"\n{'=' * 60}")
-    print("Game Map Conversion")
-    print('=' * 60)
-
-    # Find input files
-    detailed_map_dir = Path(detailed_map_dir)
-    svg_files = list(detailed_map_dir.glob("*_tactical.svg"))
-    json_files = list(detailed_map_dir.glob("*_hexdata.json"))
-
-    if not svg_files:
-        raise FileNotFoundError(f"No *_tactical.svg found in {detailed_map_dir}")
-    if not json_files:
-        raise FileNotFoundError(f"No *_hexdata.json found in {detailed_map_dir}")
-
-    svg_path = svg_files[0]
-    json_path = json_files[0]
-
     # Get map name from filename
     map_name = svg_path.stem.replace('_tactical', '')
 
@@ -1306,9 +1313,14 @@ def convert_to_game_map(
     hex_labels = generate_game_hex_labels(hex_data, hex_centers, label_rows)
     print(f"  Created hex labels (rows: {label_rows})")
 
-    # Modify existing frame color to maroon
-    frame_color = config.get('frame_color', FRAME_COLOR)
-    modify_existing_frame_color(tree, frame_color)
+    # Handle out-of-play frame
+    if is_multi_map:
+        # Hide frame entirely for multi-map clusters
+        hide_out_of_play_frame(tree)
+    else:
+        # Modify existing frame color to maroon for single maps
+        frame_color = config.get('frame_color', FRAME_COLOR)
+        modify_existing_frame_color(tree, frame_color)
 
     # Hide original hex labels
     hide_original_hex_labels(tree)
@@ -1320,10 +1332,6 @@ def convert_to_game_map(
     # Add hex labels at the end (on top) - always outside rotation for readability
     tree.getroot().append(hex_labels)
     print("  Added game hex labels at top")
-
-    # Create output directory
-    output_dir = detailed_map_dir / "game_map"
-    output_dir.mkdir(exist_ok=True)
 
     # Export files
     print("\nExporting...")
@@ -1337,8 +1345,88 @@ def convert_to_game_map(
     pdf_output = output_dir / f"{map_name}_game.pdf"
     export_pdf(svg_output, pdf_output)
 
+    print(f"  Saved: {svg_output.name}, {png_output.name}, {pdf_output.name}")
+
+    return svg_output
+
+
+def convert_to_game_map(
+    detailed_map_dir: Path,
+    config: dict = None
+) -> Path:
+    """
+    Convert detailed tactical map(s) to game-ready map(s).
+
+    Supports both single maps and multi-map clusters. For multi-map clusters,
+    all sheets are converted and output to a single game_map folder.
+
+    Args:
+        detailed_map_dir: Path to detailed map folder (contains SVG and hexdata.json)
+        config: Optional configuration dict with:
+            - terrain_style: 'auto', 'temperate', or 'arid'
+            - elevation_intensity: float multiplier (default 1.0)
+            - frame_color: hex color string
+            - label_rows: list of row numbers to label
+
+    Returns:
+        Path to output game_map folder
+    """
+    config = config or {}
+
     print(f"\n{'=' * 60}")
-    print(f"Game map saved to: {output_dir}")
+    print("Game Map Conversion")
+    print('=' * 60)
+
+    # Find input files
+    detailed_map_dir = Path(detailed_map_dir)
+    svg_files = sorted(detailed_map_dir.glob("*_tactical.svg"))
+    json_files = sorted(detailed_map_dir.glob("*_hexdata.json"))
+
+    if not svg_files:
+        raise FileNotFoundError(f"No *_tactical.svg found in {detailed_map_dir}")
+    if not json_files:
+        raise FileNotFoundError(f"No *_hexdata.json found in {detailed_map_dir}")
+
+    # Check for multi-map cluster
+    is_multi_map = len(svg_files) > 1
+    if is_multi_map:
+        print(f"\nMulti-map cluster detected: {len(svg_files)} sheets")
+
+    # Create output directory
+    output_dir = detailed_map_dir / "game_map"
+    output_dir.mkdir(exist_ok=True)
+
+    # Build map of svg -> json by matching names
+    svg_to_json = {}
+    for svg_path in svg_files:
+        base_name = svg_path.stem.replace('_tactical', '')
+        # Find matching json
+        matching_json = None
+        for json_path in json_files:
+            if json_path.stem.replace('_hexdata', '') == base_name:
+                matching_json = json_path
+                break
+        if matching_json:
+            svg_to_json[svg_path] = matching_json
+        else:
+            print(f"  Warning: No matching hexdata.json for {svg_path.name}")
+
+    # Convert each sheet
+    converted_count = 0
+    for svg_path, json_path in svg_to_json.items():
+        if is_multi_map:
+            sheet_name = svg_path.stem.replace('_tactical', '').split('_')[-1]
+            print(f"\n{'=' * 60}")
+            print(f"Converting Sheet {sheet_name}")
+            print('=' * 60)
+
+        convert_single_sheet(svg_path, json_path, output_dir, config, is_multi_map)
+        converted_count += 1
+
+    print(f"\n{'=' * 60}")
+    print(f"Game map conversion complete!")
+    print(f"  Converted: {converted_count} sheet(s)")
+    print(f"  Output: {output_dir}")
     print('=' * 60)
 
     return output_dir
