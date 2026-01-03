@@ -73,11 +73,42 @@ The `game_map_converter.py` transforms detail maps into game-ready maps:
 
 **Important (v1.1.0+):** Elevation overlays are now pre-generated during detail map creation in `tactical_map.py` with `visibility="hidden"`. The game converter just unhides them. This ensures overlays align correctly on rotated maps.
 
+### Multi-Map Generation (v2.1.0+)
+
+Generate multiple adjacent map sheets that share hex edges for seamless tabletop play:
+
+**Layout options:**
+| Layout | Sheets | Description |
+|--------|--------|-------------|
+| Single | 1 | Standard single map |
+| 2-wide (short_edge) | 2 | A (west), B (east) - side by side |
+| 2-tall (long_edge) | 2 | A (north), B (south) - stacked |
+| 4-grid | 4 | A (NW), B (NE), C (SW), D (SE) - 2x2 grid |
+
+**Key functions:**
+- `calculate_adjacent_centers()` - Computes sheet center coordinates with rotation support
+- `generate_multi_map_cluster()` - Orchestrates multi-sheet generation
+- `generate_single_sheet()` - Generates one sheet (refactored from main)
+
+**Output for multi-map:**
+```
+output/{country}/{name}/{timestamp}_{version}/
+├── map_config.json              # Original config with multi_map settings
+├── cluster_metadata.json        # Multi-map metadata (layout, sheet positions, coverage)
+├── {name}_A_tactical.svg        # Sheet A
+├── {name}_A_hexdata.json
+├── {name}_B_tactical.svg        # Sheet B
+├── {name}_B_hexdata.json
+└── ...
+```
+
+**Preview:** The web UI shows multiple rectangles with A/B/C/D labels when a multi-map layout is selected.
+
 ### Versioning
 
 Output folders include version: `{timestamp}_{version}` (e.g., `2026-01-01_15-17_v1.1.0`)
 
-Current version: **v2.0.0** - See `VERSION` constant in `tactical_map.py`
+Current version: **v2.1.1** - See `VERSION` constant in `tactical_map.py`
 
 ## Gathering Context from Previous Sessions
 
@@ -235,6 +266,7 @@ Master_Content
 
 ## Resolved Issues
 
+- **v2.1.1:** Fixed inconsistent elevation banding across multi-map clusters. All sheets now use a shared base elevation (global minimum across the cluster) so elevation bands match at sheet boundaries.
 - **v2.0.0:** Fixed overlay alignment on rotated maps (GitHub #21). Overlays are now OUTSIDE `Rotated_Content` (aligned with `Hex_Grid`) but elevation values are sampled from rotated terrain positions using inverse rotation. Hillside shading rewritten with geometric edge detection.
 - **v1.1.0:** Moved overlay generation to detail map creation phase (was in game converter).
 

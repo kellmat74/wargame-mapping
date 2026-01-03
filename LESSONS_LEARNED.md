@@ -342,6 +342,66 @@ Instead of using a confusing direction-to-edge mapping, hillside shading now use
 
 This avoids coordinate system confusion from the SVG Y-axis flip.
 
+## Multi-Map Generation (v2.1.0)
+
+### Overview
+Implemented support for generating multiple adjacent map sheets that share hex edges for seamless tabletop play.
+
+### Layout Options
+| Layout | Sheets | Sheet Positions |
+|--------|--------|-----------------|
+| Single | 1 | Standard single map |
+| 2-wide (short_edge) | 2 | A (west), B (east) |
+| 2-tall (long_edge) | 2 | A (north), B (south) |
+| 4-grid | 4 | A (NW), B (NE), C (SW), D (SE) |
+
+### Implementation Details
+
+**Sheet Center Calculation:**
+```python
+# Cluster center is the center of ALL sheets combined
+# Individual sheet centers are calculated with offsets
+
+# For 2-wide: offset = map_width - overlap_in_meters
+x_offset = width_m - (overlap_hexes * col_spacing)
+
+# Apply rotation to offset vectors for rotated maps
+if rotation_deg != 0:
+    rotated_dx = dx * cos(angle) - dy * sin(angle)
+    rotated_dy = dx * sin(angle) + dy * cos(angle)
+```
+
+**Key insight:** The user-specified center point is the cluster center (center of all sheets), not the center of sheet A. Sheet centers are calculated as offsets from this cluster center.
+
+### Output Structure
+```
+output/{country}/{name}/{timestamp}_{version}/
+├── map_config.json              # Original config
+├── cluster_metadata.json        # Layout, sheet positions, total coverage
+├── {name}_A_tactical.svg
+├── {name}_A_hexdata.json
+├── {name}_B_tactical.svg
+└── ...
+```
+
+### Frontend Preview Enhancement
+- Multiple boundary polygons drawn for each sheet
+- Sheet labels (A, B, C, D) displayed as circular markers at sheet centers
+- Orientation arrow hidden for multi-map layouts
+- Coverage statistics show total area (e.g., "20.4 x 6.5 km (2 maps)")
+
+### Consistent Elevation Banding Across Sheets (v2.1.1)
+
+**Problem:** When generating multi-map clusters, each sheet calculated its own minimum elevation as "level 0" for elevation banding. This caused visual discontinuity at sheet boundaries - the same absolute elevation could appear with different tinting on adjacent sheets.
+
+**Solution:** Pre-scan all sheets before generating any of them:
+1. `scan_sheet_elevation()` - lightweight function to sample DEM for each sheet
+2. Find global minimum elevation across all sheets
+3. Pass `cluster_min_elevation` to `generate_single_sheet()`
+4. All sheets use the same base elevation for band calculation
+
+**Result:** Elevation bands are now consistent across all sheets in a multi-map cluster. The global base elevation is stored in `cluster_metadata.json` as `cluster_base_elevation_m`.
+
 ## Future Improvements
 
 - [ ] Add river rendering with proper styling
@@ -351,6 +411,6 @@ This avoids coordinate system confusion from the SVG Y-axis flip.
 - [ ] Add legend and scale bar
 - [ ] Support for different hex sizes
 - [ ] Command-line interface for map generation
-- [ ] Batch generation of adjacent map sheets
+- [x] Batch generation of adjacent map sheets (v2.1.0)
 - [ ] Fix overlay z-order so roads/buildings render above elevation tinting
 - [ ] Fix missing road/bridge connections in detail maps

@@ -594,6 +594,25 @@
             color: #888;
             margin-top: 3px;
         }
+
+        /* Sheet label markers for multi-map preview */
+        .sheet-label-icon {
+            background: transparent;
+        }
+        .sheet-label {
+            background: rgba(0, 212, 255, 0.9);
+            color: #000;
+            font-weight: bold;
+            font-size: 20px;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid #000;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+        }
     </style>
 </head>
 <body>
@@ -2167,9 +2186,10 @@ config = MapConfig(
         // ============================================
 
         let previewMap = null;
-        let boundaryPolygon = null;
+        let boundaryPolygons = [];  // Array for multi-map support
         let centerMarker = null;
         let orientationArrow = null;
+        let sheetLabels = [];  // Array of sheet label markers (A, B, C, D)
 
         function initPreviewMap() {
             // Initialize Leaflet map with a default view
@@ -2219,11 +2239,11 @@ config = MapConfig(
             // Check for valid coordinates
             if (state.centerLat === null || state.centerLon === null ||
                 isNaN(state.centerLat) || isNaN(state.centerLon)) {
-                // Remove existing boundary if any
-                if (boundaryPolygon) {
-                    previewMap.removeLayer(boundaryPolygon);
-                    boundaryPolygon = null;
-                }
+                // Remove existing boundaries
+                boundaryPolygons.forEach(p => previewMap.removeLayer(p));
+                boundaryPolygons = [];
+                sheetLabels.forEach(l => previewMap.removeLayer(l));
+                sheetLabels = [];
                 if (centerMarker) {
                     previewMap.removeLayer(centerMarker);
                     centerMarker = null;
@@ -2237,14 +2257,36 @@ config = MapConfig(
                 return;
             }
 
-            // Calculate map dimensions in meters
+            // Calculate single map dimensions in meters
             const size = HEX_SIZE_M / Math.sqrt(3);
             const colSpacing = 1.5 * size;
             const rowSpacing = HEX_SIZE_M;
             const widthM = (GRID_WIDTH - 1) * colSpacing + 2 * size;
-            const heightM = GRID_HEIGHT * rowSpacing;
+            const heightM = GRID_HEIGHT * rowSpacing + rowSpacing / 2;
 
-            // Calculate corner offsets from center (unrotated)
+            // Calculate sheet centers for multi-map
+            const sheetCenters = calculateSheetCenters(
+                state.centerLat,
+                state.centerLon,
+                state.bearingAtTop,
+                state.multiMap.count,
+                state.multiMap.orientation,
+                widthM,
+                heightM,
+                1  // overlap_hexes
+            );
+
+            // Remove existing boundaries and labels
+            boundaryPolygons.forEach(p => previewMap.removeLayer(p));
+            boundaryPolygons = [];
+            sheetLabels.forEach(l => previewMap.removeLayer(l));
+            sheetLabels = [];
+            if (orientationArrow) {
+                previewMap.removeLayer(orientationArrow);
+                orientationArrow = null;
+            }
+
+            // Half dimensions for corner calculation
             const halfWidth = widthM / 2;
             const halfHeight = heightM / 2;
 
@@ -2256,94 +2298,97 @@ config = MapConfig(
                 { dx: -halfWidth, dy: -halfHeight }   // Bottom-left
             ];
 
-            // Apply rotation if needed
-            const rotationRad = -state.bearingAtTop * Math.PI / 180;  // Convert bearing to rotation
+            // Apply rotation
+            const rotationRad = -state.bearingAtTop * Math.PI / 180;
             const rotatedCorners = corners.map(c => {
                 const dx = c.dx * Math.cos(rotationRad) - c.dy * Math.sin(rotationRad);
                 const dy = c.dx * Math.sin(rotationRad) + c.dy * Math.cos(rotationRad);
                 return { dx, dy };
             });
 
-            // Convert meter offsets to lat/lon
-            const cornerLatLngs = rotatedCorners.map(c => {
-                const lat = state.centerLat + (c.dy / METERS_PER_DEG_LAT);
-                const lon = state.centerLon + (c.dx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180)));
-                return [lat, lon];
+            // Create boundary polygon for each sheet
+            let allBounds = null;
+            sheetCenters.forEach((sheet, index) => {
+                const cornerLatLngs = rotatedCorners.map(c => {
+                    const lat = sheet.lat + (c.dy / METERS_PER_DEG_LAT);
+                    const lon = sheet.lon + (c.dx / (METERS_PER_DEG_LON * Math.cos(sheet.lat * Math.PI / 180)));
+                    return [lat, lon];
+                });
+
+                const polygon = L.polygon(cornerLatLngs, {
+                    color: '#000000',
+                    weight: 3,
+                    fillColor: '#00d4ff',
+                    fillOpacity: 0.1
+                }).addTo(previewMap);
+                boundaryPolygons.push(polygon);
+
+                // Extend total bounds
+                if (!allBounds) {
+                    allBounds = polygon.getBounds();
+                } else {
+                    allBounds.extend(polygon.getBounds());
+                }
+
+                // Add sheet label for multi-map
+                if (state.multiMap.enabled && state.multiMap.count > 1) {
+                    const label = L.marker([sheet.lat, sheet.lon], {
+                        icon: L.divIcon({
+                            className: 'sheet-label-icon',
+                            html: `<div class="sheet-label">${sheet.name}</div>`,
+                            iconSize: [40, 40],
+                            iconAnchor: [20, 20]
+                        })
+                    }).addTo(previewMap);
+                    sheetLabels.push(label);
+                }
             });
 
-            // Remove existing boundary
-            if (boundaryPolygon) {
-                previewMap.removeLayer(boundaryPolygon);
+            // For single map, show orientation arrow
+            if (!state.multiMap.enabled || state.multiMap.count === 1) {
+                const arrowLength = 600;
+                const arrowWidth = 400;
+                const arrowOffset = halfHeight - arrowLength - 200;
+                const arrowAngleRad = state.bearingAtTop * Math.PI / 180;
+
+                const tipDx = (arrowOffset + arrowLength) * Math.sin(arrowAngleRad);
+                const tipDy = (arrowOffset + arrowLength) * Math.cos(arrowAngleRad);
+                const baseCenterDx = arrowOffset * Math.sin(arrowAngleRad);
+                const baseCenterDy = arrowOffset * Math.cos(arrowAngleRad);
+
+                const perpAngle = arrowAngleRad + Math.PI / 2;
+                const arrowHalfWidth = arrowWidth / 2;
+                const baseLeft = {
+                    dx: baseCenterDx + arrowHalfWidth * Math.sin(perpAngle),
+                    dy: baseCenterDy + arrowHalfWidth * Math.cos(perpAngle)
+                };
+                const baseRight = {
+                    dx: baseCenterDx - arrowHalfWidth * Math.sin(perpAngle),
+                    dy: baseCenterDy - arrowHalfWidth * Math.cos(perpAngle)
+                };
+
+                const arrowPoints = [
+                    [
+                        state.centerLat + tipDy / METERS_PER_DEG_LAT,
+                        state.centerLon + tipDx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180))
+                    ],
+                    [
+                        state.centerLat + baseLeft.dy / METERS_PER_DEG_LAT,
+                        state.centerLon + baseLeft.dx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180))
+                    ],
+                    [
+                        state.centerLat + baseRight.dy / METERS_PER_DEG_LAT,
+                        state.centerLon + baseRight.dx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180))
+                    ]
+                ];
+
+                orientationArrow = L.polygon(arrowPoints, {
+                    color: '#000000',
+                    weight: 2,
+                    fillColor: '#ff6b6b',
+                    fillOpacity: 0.9
+                }).addTo(previewMap);
             }
-
-            // Create boundary polygon
-            boundaryPolygon = L.polygon(cornerLatLngs, {
-                color: '#000000',
-                weight: 3,
-                fillColor: '#00d4ff',
-                fillOpacity: 0.1
-            }).addTo(previewMap);
-
-            // Create orientation arrow inside boundary pointing toward top of map
-            // For multi-map, this will be replaced with map labels (A, B, C, D)
-            if (orientationArrow) {
-                previewMap.removeLayer(orientationArrow);
-            }
-
-            // Arrow sits inside the boundary, pointing toward the top edge
-            const arrowLength = 600;   // Arrow length (meters)
-            const arrowWidth = 400;    // Arrow width at base (meters)
-            const arrowOffset = halfHeight - arrowLength - 200; // Position inside, near top
-
-            // Arrow points toward "top" of map (in direction of bearingAtTop)
-            // Positive bearing = clockwise rotation
-            const arrowAngleRad = state.bearingAtTop * Math.PI / 180;
-
-            // Arrow tip position (toward top edge)
-            const tipDx = (arrowOffset + arrowLength) * Math.sin(arrowAngleRad);
-            const tipDy = (arrowOffset + arrowLength) * Math.cos(arrowAngleRad);
-
-            // Arrow base center
-            const baseCenterDx = arrowOffset * Math.sin(arrowAngleRad);
-            const baseCenterDy = arrowOffset * Math.cos(arrowAngleRad);
-
-            // Perpendicular offset for arrow base width
-            const perpAngle = arrowAngleRad + Math.PI / 2;
-            const arrowHalfWidth = arrowWidth / 2;
-            const baseLeft = {
-                dx: baseCenterDx + arrowHalfWidth * Math.sin(perpAngle),
-                dy: baseCenterDy + arrowHalfWidth * Math.cos(perpAngle)
-            };
-            const baseRight = {
-                dx: baseCenterDx - arrowHalfWidth * Math.sin(perpAngle),
-                dy: baseCenterDy - arrowHalfWidth * Math.cos(perpAngle)
-            };
-
-            // Convert to lat/lon
-            const arrowPoints = [
-                // Tip (pointing toward top)
-                [
-                    state.centerLat + tipDy / METERS_PER_DEG_LAT,
-                    state.centerLon + tipDx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180))
-                ],
-                // Base left
-                [
-                    state.centerLat + baseLeft.dy / METERS_PER_DEG_LAT,
-                    state.centerLon + baseLeft.dx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180))
-                ],
-                // Base right
-                [
-                    state.centerLat + baseRight.dy / METERS_PER_DEG_LAT,
-                    state.centerLon + baseRight.dx / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180))
-                ]
-            ];
-
-            orientationArrow = L.polygon(arrowPoints, {
-                color: '#000000',
-                weight: 2,
-                fillColor: '#ff6b6b',
-                fillOpacity: 0.9
-            }).addTo(previewMap);
 
             // Update or create center marker
             if (centerMarker) {
@@ -2358,17 +2403,105 @@ config = MapConfig(
                 }).addTo(previewMap);
             }
 
-            // Fit map to boundary
-            previewMap.fitBounds(boundaryPolygon.getBounds(), { padding: [50, 50] });
+            // Fit map to all boundaries
+            if (allBounds) {
+                previewMap.fitBounds(allBounds, { padding: [50, 50] });
+            }
 
-            // Update statistics
-            document.getElementById('statCoverage').textContent =
-                `${(widthM/1000).toFixed(1)} x ${(heightM/1000).toFixed(1)} km`;
+            // Update statistics - calculate total coverage for multi-map
+            let totalWidthM = widthM;
+            let totalHeightM = heightM;
+            const overlapHexes = 1;
+
+            if (state.multiMap.enabled && state.multiMap.count > 1) {
+                if (state.multiMap.orientation === 'short_edge') {
+                    totalWidthM = widthM * 2 - (overlapHexes * colSpacing);
+                } else if (state.multiMap.orientation === 'long_edge') {
+                    totalHeightM = heightM * 2 - (overlapHexes * rowSpacing);
+                } else if (state.multiMap.orientation === 'grid') {
+                    totalWidthM = widthM * 2 - (overlapHexes * colSpacing);
+                    totalHeightM = heightM * 2 - (overlapHexes * rowSpacing);
+                }
+            }
+
+            const coverageText = state.multiMap.enabled && state.multiMap.count > 1
+                ? `${(totalWidthM/1000).toFixed(1)} x ${(totalHeightM/1000).toFixed(1)} km (${state.multiMap.count} maps)`
+                : `${(widthM/1000).toFixed(1)} x ${(heightM/1000).toFixed(1)} km`;
+            document.getElementById('statCoverage').textContent = coverageText;
 
             const rotationDisplay = state.bearingAtTop === 0
                 ? '0° (North up)'
                 : `${state.bearingAtTop}° (${bearingToDirection(state.bearingAtTop)} up)`;
             document.getElementById('statRotation').textContent = rotationDisplay;
+        }
+
+        /**
+         * Calculate sheet centers for multi-map layouts.
+         * JavaScript equivalent of tactical_map.py:calculate_adjacent_centers()
+         */
+        function calculateSheetCenters(centerLat, centerLon, rotationDeg, count, orientation, widthM, heightM, overlapHexes) {
+            if (count === 1 || orientation === 'single') {
+                return [{ name: '', lat: centerLat, lon: centerLon }];
+            }
+
+            // Calculate overlap offset in meters
+            const size = HEX_SIZE_M / Math.sqrt(3);
+            const colSpacing = 1.5 * size;
+            const rowSpacing = HEX_SIZE_M;
+
+            // Offset between sheet centers (accounting for overlap)
+            const xOffset = widthM - (overlapHexes * colSpacing);
+            const yOffset = heightM - (overlapHexes * rowSpacing);
+
+            // Define sheet positions relative to cluster center (0,0)
+            let positions = [];
+            if (orientation === 'short_edge' && count === 2) {
+                // Side-by-side: A on left, B on right
+                positions = [
+                    { name: 'A', dx: -xOffset / 2, dy: 0 },
+                    { name: 'B', dx: +xOffset / 2, dy: 0 }
+                ];
+            } else if (orientation === 'long_edge' && count === 2) {
+                // Stacked: A on top, B on bottom
+                positions = [
+                    { name: 'A', dx: 0, dy: +yOffset / 2 },
+                    { name: 'B', dx: 0, dy: -yOffset / 2 }
+                ];
+            } else if (orientation === 'grid' && count === 4) {
+                // 2x2 grid: A=NW, B=NE, C=SW, D=SE
+                positions = [
+                    { name: 'A', dx: -xOffset / 2, dy: +yOffset / 2 },
+                    { name: 'B', dx: +xOffset / 2, dy: +yOffset / 2 },
+                    { name: 'C', dx: -xOffset / 2, dy: -yOffset / 2 },
+                    { name: 'D', dx: +xOffset / 2, dy: -yOffset / 2 }
+                ];
+            } else {
+                return [{ name: '', lat: centerLat, lon: centerLon }];
+            }
+
+            // Apply rotation to offset vectors
+            const angleRad = rotationDeg * Math.PI / 180;
+            const cosA = Math.cos(angleRad);
+            const sinA = Math.sin(angleRad);
+
+            return positions.map(pos => {
+                let dx = pos.dx;
+                let dy = pos.dy;
+
+                // Rotate offset by map rotation angle
+                if (rotationDeg !== 0) {
+                    const rotatedDx = dx * cosA - dy * sinA;
+                    const rotatedDy = dx * sinA + dy * cosA;
+                    dx = rotatedDx;
+                    dy = rotatedDy;
+                }
+
+                // Convert meter offsets to lat/lon
+                const lat = centerLat + (dy / METERS_PER_DEG_LAT);
+                const lon = centerLon + (dx / (METERS_PER_DEG_LON * Math.cos(centerLat * Math.PI / 180)));
+
+                return { name: pos.name, lat, lon };
+            });
         }
 
         // Update preview when rotation changes

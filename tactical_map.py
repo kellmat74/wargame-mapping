@@ -49,7 +49,7 @@ GEOFABRIK_DIR = DATA_DIR / "geofabrik"
 DEFAULTS_FILE = Path("map_defaults.json")
 
 # === Version ===
-VERSION = "v2.0.0"
+VERSION = "v2.1.1"
 
 
 def load_map_defaults() -> dict:
@@ -561,6 +561,564 @@ class MapConfig:
         )
 
 
+# === Multi-Map Generation Functions ===
+
+def calculate_map_dimensions() -> Tuple[float, float]:
+    """
+    Calculate single map dimensions in meters based on hex grid constants.
+
+    Returns:
+        Tuple of (width_m, height_m)
+    """
+    size = HEX_SIZE_M / math.sqrt(3)  # center to vertex
+    col_spacing = 1.5 * size
+    row_spacing = HEX_SIZE_M
+
+    width_m = (GRID_WIDTH - 1) * col_spacing + 2 * size
+    height_m = GRID_HEIGHT * row_spacing + row_spacing / 2
+
+    return (width_m, height_m)
+
+
+def calculate_adjacent_centers(
+    center_lat: float,
+    center_lon: float,
+    rotation_deg: float,
+    count: int,
+    orientation: str,
+    overlap_hexes: int = 1
+) -> List[Tuple[str, float, float]]:
+    """
+    Calculate center coordinates for all sheets in a multi-map layout.
+
+    The center point provided is the center of the ENTIRE multi-map cluster,
+    not the center of sheet A.
+
+    Args:
+        center_lat: Latitude of cluster center
+        center_lon: Longitude of cluster center
+        rotation_deg: Map rotation in degrees (0 = north up)
+        count: Number of maps (1, 2, or 4)
+        orientation: 'single', 'short_edge' (side-by-side), 'long_edge' (stacked), or 'grid' (2x2)
+        overlap_hexes: Number of hex columns/rows shared between adjacent maps (default 1)
+
+    Returns:
+        List of (sheet_name, lat, lon) tuples
+
+    Layout examples (center point = ●, cluster center):
+
+    2-short (wide):     2-long (tall):      4-grid:
+    ┌─────┬─────┐       ┌─────┐            ┌─────┬─────┐
+    │  A  │  B  │       │  A  │            │  A  │  B  │
+    │  ●──┼──   │       │  ●  │            │  ●──┼──   │
+    └─────┴─────┘       ├─────┤            ├─────┼─────┤
+                        │  B  │            │  C  │  D  │
+                        │     │            │     │     │
+                        └─────┘            └─────┴─────┘
+    """
+    if count == 1 or orientation == 'single':
+        return [('', center_lat, center_lon)]
+
+    # Calculate map dimensions
+    width_m, height_m = calculate_map_dimensions()
+
+    # Calculate overlap offset in meters
+    size = HEX_SIZE_M / math.sqrt(3)
+    col_spacing = 1.5 * size
+    row_spacing = HEX_SIZE_M
+
+    # Offset between sheet centers (accounting for overlap)
+    # For short_edge: sheets side-by-side, share columns
+    # For long_edge: sheets stacked, share rows
+    x_offset = width_m - (overlap_hexes * col_spacing) if overlap_hexes > 0 else width_m
+    y_offset = height_m - (overlap_hexes * row_spacing) if overlap_hexes > 0 else height_m
+
+    # Define sheet positions relative to cluster center (0,0)
+    # Offsets are in "map space" (before rotation)
+    if orientation == 'short_edge' and count == 2:
+        # Side-by-side: A on left, B on right
+        positions = [
+            ('A', -x_offset / 2, 0),  # West
+            ('B', +x_offset / 2, 0),  # East
+        ]
+    elif orientation == 'long_edge' and count == 2:
+        # Stacked: A on top, B on bottom
+        positions = [
+            ('A', 0, +y_offset / 2),  # North
+            ('B', 0, -y_offset / 2),  # South
+        ]
+    elif orientation == 'grid' and count == 4:
+        # 2x2 grid: A=NW, B=NE, C=SW, D=SE
+        positions = [
+            ('A', -x_offset / 2, +y_offset / 2),  # Northwest
+            ('B', +x_offset / 2, +y_offset / 2),  # Northeast
+            ('C', -x_offset / 2, -y_offset / 2),  # Southwest
+            ('D', +x_offset / 2, -y_offset / 2),  # Southeast
+        ]
+    else:
+        # Fallback: single map
+        return [('', center_lat, center_lon)]
+
+    # Transform cluster center to UTM
+    grid_crs = set_grid_crs(center_lon, center_lat)
+    transformer_to_utm = Transformer.from_crs(WGS84, grid_crs, always_xy=True)
+    transformer_to_wgs = Transformer.from_crs(grid_crs, WGS84, always_xy=True)
+
+    cluster_x, cluster_y = transformer_to_utm.transform(center_lon, center_lat)
+
+    # Apply rotation to offset vectors if map is rotated
+    angle_rad = math.radians(rotation_deg)
+    cos_a = math.cos(angle_rad)
+    sin_a = math.sin(angle_rad)
+
+    results = []
+    for name, dx, dy in positions:
+        # Rotate offset by map rotation angle
+        if rotation_deg != 0:
+            rotated_dx = dx * cos_a - dy * sin_a
+            rotated_dy = dx * sin_a + dy * cos_a
+        else:
+            rotated_dx, rotated_dy = dx, dy
+
+        # Calculate sheet center in UTM
+        sheet_x = cluster_x + rotated_dx
+        sheet_y = cluster_y + rotated_dy
+
+        # Transform back to WGS84
+        sheet_lon, sheet_lat = transformer_to_wgs.transform(sheet_x, sheet_y)
+
+        results.append((name, sheet_lat, sheet_lon))
+
+    return results
+
+
+def scan_sheet_elevation(config: MapConfig) -> Optional[float]:
+    """
+    Pre-scan a sheet's elevation range without generating the full map.
+
+    Uses a simple grid sampling approach in WGS84 coordinates to avoid
+    dependencies on GRID_CRS or TacticalHexGrid initialization order.
+
+    Args:
+        config: MapConfig for the sheet to scan
+
+    Returns:
+        Minimum elevation in meters, or None if DEM unavailable
+    """
+    # Check if DEM exists
+    dem_path = config.data_path / "elevation.tif"
+    if not dem_path.exists():
+        # Try to extract data first
+        auto_extract_mgrs_data(config)
+        if not dem_path.exists():
+            return None
+
+    try:
+        # Load DEM (already in WGS84/EPSG:4326)
+        dem = load_dem(config)
+
+        # Calculate approximate map extent in degrees
+        # Map is roughly 10km x 6.5km, convert to degrees at this latitude
+        meters_per_deg_lat = 111320  # approximately constant
+        meters_per_deg_lon = 111320 * math.cos(math.radians(config.center_lat))
+
+        map_width_m, map_height_m = calculate_map_dimensions()
+        half_width_deg = (map_width_m / 2) / meters_per_deg_lon
+        half_height_deg = (map_height_m / 2) / meters_per_deg_lat
+
+        # Sample grid (roughly every 500m = ~20x13 samples)
+        sample_spacing_deg = 500 / meters_per_deg_lat
+        elevations = []
+
+        lat = config.center_lat - half_height_deg
+        while lat <= config.center_lat + half_height_deg:
+            lon = config.center_lon - half_width_deg
+            while lon <= config.center_lon + half_width_deg:
+                try:
+                    row, col = dem.index(lon, lat)
+                    if 0 <= row < dem.height and 0 <= col < dem.width:
+                        elev = dem.read(1)[row, col]
+                        if elev != dem.nodata and elev > -1000:
+                            elevations.append(float(elev))
+                except:
+                    pass
+                lon += sample_spacing_deg
+            lat += sample_spacing_deg
+
+        dem.close()
+
+        if elevations:
+            return min(elevations)
+        return None
+
+    except Exception as e:
+        print(f"  Warning: Could not scan elevation for {config.name}: {e}")
+        return None
+
+
+def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
+    """
+    Generate multiple adjacent map sheets as a cluster.
+
+    Args:
+        base_config: Base MapConfig with cluster center and settings
+        multi_map: Multi-map settings dict with:
+            - count: int (2 or 4)
+            - orientation: str ('short_edge', 'long_edge', 'grid')
+            - overlap_hexes: int (default 1)
+    """
+    count = multi_map.get('count', 2)
+    orientation = multi_map.get('orientation', 'short_edge')
+    overlap_hexes = multi_map.get('overlap_hexes', 1)
+
+    print("=" * 60)
+    print(f"Multi-Map Generator: {base_config.name}")
+    print("=" * 60)
+    print(f"Cluster center: {base_config.center_lat:.4f}°N, {base_config.center_lon:.4f}°E")
+    print(f"Layout: {count} maps ({orientation})")
+    if base_config.rotation_deg != 0:
+        print(f"Rotation: {base_config.rotation_deg}° clockwise")
+
+    # Calculate sheet centers
+    sheet_centers = calculate_adjacent_centers(
+        center_lat=base_config.center_lat,
+        center_lon=base_config.center_lon,
+        rotation_deg=base_config.rotation_deg,
+        count=count,
+        orientation=orientation,
+        overlap_hexes=overlap_hexes
+    )
+
+    print(f"\nSheet centers:")
+    for name, lat, lon in sheet_centers:
+        print(f"  Sheet {name}: {lat:.4f}°N, {lon:.4f}°E")
+
+    # Pre-scan all sheets to find global minimum elevation
+    # This ensures consistent elevation banding across all sheets
+    print(f"\nPre-scanning elevation across all sheets...")
+    sheet_min_elevations = []
+    for sheet_name, sheet_lat, sheet_lon in sheet_centers:
+        scan_config = MapConfig(
+            name=f"{base_config.name}_{sheet_name}",
+            center_lat=sheet_lat,
+            center_lon=sheet_lon,
+            region=base_config.region,
+            country=base_config.country,
+            rotation_deg=base_config.rotation_deg,
+        )
+        min_elev = scan_sheet_elevation(scan_config)
+        if min_elev is not None:
+            sheet_min_elevations.append(min_elev)
+            print(f"  Sheet {sheet_name}: min elevation {min_elev:.0f}m")
+
+    cluster_min_elevation = None
+    if sheet_min_elevations:
+        cluster_min_elevation = min(sheet_min_elevations)
+        print(f"\nCluster base elevation: {cluster_min_elevation:.0f}m")
+    else:
+        print(f"\nWarning: Could not determine cluster elevation range")
+
+    # Create output directory (use base config's timestamp for cluster)
+    base_config.output_path.mkdir(parents=True, exist_ok=True)
+
+    # Generate each sheet
+    generated_sheets = []
+    width_m, height_m = calculate_map_dimensions()
+
+    for i, (sheet_name, sheet_lat, sheet_lon) in enumerate(sheet_centers):
+        print(f"\n{'='*60}")
+        print(f"Generating Sheet {sheet_name} ({i+1}/{len(sheet_centers)})")
+        print(f"{'='*60}")
+
+        # Create config for this sheet
+        # Use the same region and rotation as base config
+        sheet_config = MapConfig(
+            name=f"{base_config.name}_{sheet_name}" if sheet_name else base_config.name,
+            center_lat=sheet_lat,
+            center_lon=sheet_lon,
+            region=base_config.region,
+            country=base_config.country,
+            rotation_deg=base_config.rotation_deg,
+            timestamp=base_config.timestamp,  # Use same timestamp for cluster
+        )
+
+        # Generate this sheet with cluster-wide elevation base
+        output_path = generate_single_sheet(
+            sheet_config,
+            base_config.output_path,
+            cluster_min_elevation=cluster_min_elevation
+        )
+
+        if output_path:
+            generated_sheets.append({
+                'name': sheet_name,
+                'center_lat': sheet_lat,
+                'center_lon': sheet_lon,
+                'output_file': str(output_path.name) if output_path else None,
+            })
+
+    # Calculate total coverage
+    if orientation == 'short_edge':
+        total_width_m = width_m * 2 - (overlap_hexes * 1.5 * HEX_SIZE_M / math.sqrt(3))
+        total_height_m = height_m
+    elif orientation == 'long_edge':
+        total_width_m = width_m
+        total_height_m = height_m * 2 - (overlap_hexes * HEX_SIZE_M)
+    elif orientation == 'grid':
+        total_width_m = width_m * 2 - (overlap_hexes * 1.5 * HEX_SIZE_M / math.sqrt(3))
+        total_height_m = height_m * 2 - (overlap_hexes * HEX_SIZE_M)
+    else:
+        total_width_m = width_m
+        total_height_m = height_m
+
+    # Write cluster metadata
+    cluster_metadata = {
+        'version': VERSION,
+        'layout': orientation,
+        'count': count,
+        'overlap_hexes': overlap_hexes,
+        'cluster_center': {
+            'lat': base_config.center_lat,
+            'lon': base_config.center_lon,
+        },
+        'rotation_deg': base_config.rotation_deg,
+        'total_coverage_km': {
+            'width': total_width_m / 1000,
+            'height': total_height_m / 1000,
+        },
+        'cluster_base_elevation_m': cluster_min_elevation,
+        'sheets': generated_sheets,
+    }
+
+    metadata_path = base_config.output_path / 'cluster_metadata.json'
+    with open(metadata_path, 'w') as f:
+        json.dump(cluster_metadata, f, indent=2)
+    print(f"\nSaved cluster metadata to {metadata_path}")
+
+    # Copy original config
+    config_copy_path = base_config.output_path / 'map_config.json'
+    config_data = {
+        'name': base_config.name,
+        'center_lat': base_config.center_lat,
+        'center_lon': base_config.center_lon,
+        'region': base_config.region,
+        'country': base_config.country,
+        'rotation_deg': base_config.rotation_deg,
+        'multi_map': multi_map,
+    }
+    with open(config_copy_path, 'w') as f:
+        json.dump(config_data, f, indent=2)
+
+    print(f"\n{'='*60}")
+    print(f"Multi-Map Generation Complete!")
+    print(f"{'='*60}")
+    print(f"Generated {len(generated_sheets)} sheets in {base_config.output_path}")
+    print(f"Total coverage: {total_width_m/1000:.1f}km × {total_height_m/1000:.1f}km")
+
+
+def generate_single_sheet(
+    config: MapConfig,
+    output_dir: Path = None,
+    cluster_min_elevation: float = None
+) -> Optional[Path]:
+    """
+    Generate a single map sheet.
+
+    This is a simplified version of the main generation flow, used for
+    multi-map cluster generation.
+
+    Args:
+        config: MapConfig for this sheet
+        output_dir: Override output directory (for cluster generation)
+        cluster_min_elevation: Optional minimum elevation across all sheets in a cluster.
+            When provided, elevation bands are calculated relative to this value
+            instead of the sheet's local minimum, ensuring consistent banding
+            across multi-map clusters.
+
+    Returns:
+        Path to generated SVG, or None if generation failed
+    """
+    # Use provided output_dir or config's default
+    if output_dir:
+        actual_output = output_dir
+    else:
+        actual_output = config.output_path
+        actual_output.mkdir(parents=True, exist_ok=True)
+
+    print(f"Center: {config.center_lat:.4f}°N, {config.center_lon:.4f}°E")
+    print(f"Grid: {GRID_WIDTH} x {GRID_HEIGHT} hexes @ {HEX_SIZE_M}m")
+
+    # Check if data exists, try to extract if not
+    dem_path = config.data_path / "elevation.tif"
+    data_missing = not config.data_path.exists() or not dem_path.exists()
+
+    if data_missing:
+        print(f"Data not found for {config.region}, attempting to extract...")
+        extracted_country = auto_extract_mgrs_data(config)
+        if extracted_country and not config.country:
+            config.country = extracted_country
+        # Re-check
+        if not dem_path.exists():
+            print(f"ERROR: Could not get data for {config.region}")
+            return None
+
+    # Ensure all needed MGRS squares are available
+    needed_squares = get_mgrs_squares_for_bounds(config.data_bounds)
+    available_paths = get_all_data_paths(config)
+    available_squares = [str(p).replace("data/", "") for p in available_paths]
+    missing_squares = [sq for sq in needed_squares if sq not in available_squares]
+
+    if missing_squares:
+        print(f"Extracting additional MGRS squares: {', '.join(missing_squares)}")
+        available_pbfs = get_available_country_pbfs()
+        if available_pbfs:
+            for sq in missing_squares:
+                result = extract_single_mgrs_square(sq, available_pbfs)
+                if result and not config.country:
+                    config.country = result
+
+    # Create hex grid
+    grid = TacticalHexGrid(config)
+    hex_coords = grid.generate_grid()
+    print(f"Generated {len(hex_coords)} hex coordinates")
+
+    # Load data
+    print("Loading data...")
+    dem = load_dem(config)
+    print(f"  DEM: {dem.width}x{dem.height}")
+
+    # Load landcover
+    print("  Loading landcover...")
+    try:
+        landcover = load_geojson_from_all_squares(config, "landcover.geojson")
+        if not landcover.empty:
+            landcover = landcover.to_crs(GRID_CRS)
+            landcover = landcover[landcover.geometry.notna() & landcover.geometry.is_valid]
+            map_bounds = box(
+                config.data_min_x - 1000, config.data_min_y - 1000,
+                config.data_max_x + 1000, config.data_max_y + 1000
+            )
+            landcover = landcover[landcover.intersects(map_bounds)]
+            print(f"  Filtered to {len(landcover)} landcover polygons")
+        else:
+            landcover = gpd.GeoDataFrame()
+    except Exception as e:
+        print(f"  Warning: Error loading landcover: {e}")
+        landcover = gpd.GeoDataFrame()
+
+    # Load roads and buildings
+    roads = load_roads(config)
+    buildings = load_buildings(config)
+
+    # Load enhanced features
+    print("Loading enhanced features...")
+    streams = load_optional_features(config, "streams.geojson", "streams")
+    if streams is not None and not streams.empty:
+        streams = merge_stream_segments(streams)
+    paths = load_optional_features(config, "paths.geojson", "paths")
+    barriers = load_optional_features(config, "barriers.geojson", "barriers")
+    powerlines = load_optional_features(config, "powerlines.geojson", "powerlines")
+    bridges = load_optional_features(config, "bridges.geojson", "bridges")
+    tree_rows = load_optional_features(config, "tree_rows.geojson", "tree_rows")
+    railways = load_optional_features(config, "railways.geojson", "railways")
+    farmland = load_optional_features(config, "farmland.geojson", "farmland")
+    cliffs = load_optional_features(config, "cliffs.geojson", "cliffs")
+    waterways_area = load_optional_features(config, "waterways_area.geojson", "waterways_area")
+    coastline = load_optional_features(config, "coastline.geojson", "coastline", buffer_m=5000)
+
+    # Load land polygons
+    print("Loading land polygons...")
+    transformer_to_wgs84 = Transformer.from_crs(GRID_CRS, WGS84, always_xy=True)
+    data_min_lon, data_min_lat = transformer_to_wgs84.transform(config.data_min_x, config.data_min_y)
+    data_max_lon, data_max_lat = transformer_to_wgs84.transform(config.data_max_x, config.data_max_y)
+    land_polygons = load_land_polygons_for_bounds(
+        data_min_lon, data_min_lat, data_max_lon, data_max_lat,
+        target_crs=GRID_CRS
+    )
+
+    # Load additional features
+    mangrove = load_optional_features(config, "mangrove.geojson", "mangrove")
+    wetland = load_optional_features(config, "wetland.geojson", "wetland")
+    heath = load_optional_features(config, "heath.geojson", "heath")
+    rocky_terrain = load_optional_features(config, "rocky_terrain.geojson", "rocky_terrain")
+    sand = load_optional_features(config, "sand.geojson", "sand")
+    military = load_optional_features(config, "military.geojson", "military")
+    quarries = load_optional_features(config, "quarries.geojson", "quarries")
+    cemeteries = load_optional_features(config, "cemeteries.geojson", "cemeteries")
+    places = load_optional_features(config, "places.geojson", "places")
+    peaks = load_optional_features(config, "peaks.geojson", "peaks")
+    caves = load_optional_features(config, "caves.geojson", "caves")
+    dams = load_optional_features(config, "dams.geojson", "dams")
+    airfields = load_optional_features(config, "airfields.geojson", "airfields")
+    ports = load_optional_features(config, "ports.geojson", "ports")
+    towers = load_optional_features(config, "towers.geojson", "towers")
+    fuel_infrastructure = load_optional_features(config, "fuel_infrastructure.geojson", "fuel_infrastructure")
+
+    # Download reference tiles
+    reference_tiles = download_highres_reference_tiles(config)
+    if reference_tiles is None:
+        reference_tiles = load_reference_tile_info(config)
+
+    # Generate contours and MGRS grid
+    contours = generate_contours(dem, config)
+    mgrs_grid = generate_mgrs_grid(config)
+
+    # Classify terrain
+    hexes = classify_terrain(grid, hex_coords, dem, landcover, config)
+
+    # Bundle enhanced features
+    enhanced_features = {
+        'streams': streams, 'paths': paths, 'barriers': barriers,
+        'powerlines': powerlines, 'bridges': bridges, 'tree_rows': tree_rows,
+        'railways': railways, 'farmland': farmland, 'cliffs': cliffs,
+        'waterways_area': waterways_area, 'coastline': coastline,
+        'land_polygons': land_polygons, 'reference_tiles': reference_tiles,
+        'mangrove': mangrove, 'wetland': wetland, 'heath': heath,
+        'rocky_terrain': rocky_terrain, 'sand': sand, 'military': military,
+        'quarries': quarries, 'cemeteries': cemeteries, 'places': places,
+        'peaks': peaks, 'caves': caves, 'dams': dams, 'airfields': airfields,
+        'ports': ports, 'towers': towers, 'fuel_infrastructure': fuel_infrastructure,
+    }
+
+    # Render SVG
+    svg_path = actual_output / f"{config.name}_tactical.svg"
+    render_tactical_svg(grid, hexes, contours, roads, buildings, landcover, mgrs_grid, config, svg_path, enhanced_features, dem, cluster_min_elevation)
+
+    # Save hex data
+    json_path = actual_output / f"{config.name}_hexdata.json"
+    hex_data = {
+        "metadata": {
+            "name": config.name,
+            "center_lat": config.center_lat,
+            "center_lon": config.center_lon,
+            "hex_size_m": HEX_SIZE_M,
+            "grid_width": GRID_WIDTH,
+            "grid_height": GRID_HEIGHT,
+            "timestamp": config.timestamp,
+            "version": VERSION,
+            "country": config.country,
+            "region": config.region,
+            "rotation_deg": config.rotation_deg,
+        },
+        "hexes": [
+            {
+                "coord": [h.q, h.r],
+                "terrain": h.terrain,
+                "elevation_avg": round(h.elevation_avg, 1),
+                "elevation_min": round(h.elevation_min, 1),
+                "elevation_max": round(h.elevation_max, 1),
+            }
+            for h in hexes
+        ]
+    }
+    with open(json_path, 'w') as f:
+        json.dump(hex_data, f, indent=2)
+
+    print(f"  Saved hex data to {json_path}")
+
+    return svg_path
+
+
 def get_mgrs_squares_for_bounds(data_bounds: Bounds, grid_crs: str = GRID_CRS) -> List[str]:
     """Get all MGRS 100km squares that cover the given data bounds.
 
@@ -977,6 +1535,7 @@ def generate_game_overlays(
     dem=None,
     dem_crs=None,
     grid_crs=None,
+    cluster_min_elevation: float = None,
 ):
     """
     Generate hidden elevation overlay and hillside shading layers.
@@ -1049,10 +1608,16 @@ def generate_game_overlays(
 
         # Use rotated elevations for band calculation
         elevations = list(rotated_elevations.values())
-        min_elev = min(elevations) if elevations else 0
+        local_min_elev = min(elevations) if elevations else 0
         max_elev = max(elevations) if elevations else 0
 
-        print(f"  Game overlays - Rotated elevation range: {min_elev:.0f}m - {max_elev:.0f}m ({max_elev - min_elev:.0f}m relief)")
+        # Use cluster minimum if provided (for consistent banding across multi-maps)
+        if cluster_min_elevation is not None:
+            min_elev = cluster_min_elevation
+            print(f"  Game overlays - Rotated elevation range: {local_min_elev:.0f}m - {max_elev:.0f}m (using cluster base: {min_elev:.0f}m)")
+        else:
+            min_elev = local_min_elev
+            print(f"  Game overlays - Rotated elevation range: {min_elev:.0f}m - {max_elev:.0f}m ({max_elev - min_elev:.0f}m relief)")
 
         # Build elevation band lookup from rotated elevations
         elevation_bands = {}
@@ -1064,10 +1629,16 @@ def generate_game_overlays(
     else:
         # No rotation - use pre-calculated elevations from hex objects
         elevations = [h.elevation_avg for h in hexes]
-        min_elev = min(elevations) if elevations else 0
+        local_min_elev = min(elevations) if elevations else 0
         max_elev = max(elevations) if elevations else 0
 
-        print(f"  Game overlays - Elevation range: {min_elev:.0f}m - {max_elev:.0f}m ({max_elev - min_elev:.0f}m relief)")
+        # Use cluster minimum if provided (for consistent banding across multi-maps)
+        if cluster_min_elevation is not None:
+            min_elev = cluster_min_elevation
+            print(f"  Game overlays - Elevation range: {local_min_elev:.0f}m - {max_elev:.0f}m (using cluster base: {min_elev:.0f}m)")
+        else:
+            min_elev = local_min_elev
+            print(f"  Game overlays - Elevation range: {min_elev:.0f}m - {max_elev:.0f}m ({max_elev - min_elev:.0f}m relief)")
 
         # Build elevation band lookup
         elevation_bands = {}
@@ -1079,9 +1650,9 @@ def generate_game_overlays(
     # Calculate hex geometry
     size = hex_size_m / math.sqrt(3)  # Center to vertex
 
-    # Create hidden groups
-    layer_elevation = dwg.g(id="Game_Elevation_Overlay", visibility="hidden")
-    layer_hillside = dwg.g(id="Game_Hillside_Shading", visibility="hidden")
+    # Create game overlay groups
+    layer_elevation = dwg.g(id="Game_Elevation_Overlay")
+    layer_hillside = dwg.g(id="Game_Hillside_Shading")
 
     # === Generate Elevation Overlay ===
     overlay_count = 0
@@ -1843,6 +2414,7 @@ def render_tactical_svg(
     output_path: Path,
     enhanced_features: dict = None,
     dem: rasterio.DatasetReader = None,
+    cluster_min_elevation: float = None,
 ) -> None:
     """Render tactical map to SVG with 1 SVG unit = 1 meter."""
     print("\nRendering SVG...")
@@ -2164,6 +2736,7 @@ def render_tactical_svg(
         dem=dem,
         dem_crs=dem.crs if dem else None,
         grid_crs=GRID_CRS,
+        cluster_min_elevation=cluster_min_elevation,
     )
 
     # Map terrain types to their layer groups
@@ -3880,8 +4453,17 @@ def render_tactical_svg(
     print(f"  Saved to {output_path} ({save_time:.1f}s)", flush=True)
 
 
-def load_config_from_file() -> Optional[MapConfig]:
-    """Load configuration from map_config.json if it exists."""
+def load_config_from_file() -> Optional[Tuple[MapConfig, Optional[dict]]]:
+    """Load configuration from map_config.json if it exists.
+
+    Returns:
+        Tuple of (MapConfig, multi_map_settings) or None if no config file.
+        multi_map_settings is None for single map, or dict with:
+        - enabled: bool
+        - count: int (1, 2, or 4)
+        - orientation: str ('single', 'short_edge', 'long_edge', 'grid')
+        - overlap_hexes: int (default 1)
+    """
     config_path = Path("map_config.json")
     if not config_path.exists():
         return None
@@ -3903,7 +4485,12 @@ def load_config_from_file() -> Optional[MapConfig]:
         rotation_deg=data.get("rotation_deg", 0),
     )
 
-    return config
+    # Extract multi_map settings if present
+    multi_map = data.get("multi_map")
+    if multi_map and multi_map.get("enabled") and multi_map.get("count", 1) > 1:
+        return (config, multi_map)
+
+    return (config, None)
 
 
 def get_available_country_pbfs() -> List[Tuple[str, Path]]:
@@ -4276,12 +4863,12 @@ def get_all_data_paths(config: 'MapConfig') -> List[Path]:
 
 
 def main():
-    """Generate tactical map."""
+    """Generate tactical map (single or multi-map)."""
 
     # Try to load from config file first
-    config = load_config_from_file()
+    result = load_config_from_file()
 
-    if config is None:
+    if result is None:
         print("=" * 60)
         print("ERROR: No map_config.json found!")
         print("=" * 60)
@@ -4293,15 +4880,9 @@ def main():
         print()
         sys.exit(1)
 
-    print("=" * 60)
-    print(f"Tactical Map Generator: {config.name}")
-    print("=" * 60)
-    print(f"Center: {config.center_lat:.4f}°N, {config.center_lon:.4f}°E")
-    print(f"Grid: {GRID_WIDTH} x {GRID_HEIGHT} hexes @ {HEX_SIZE_M}m")
-    print(f"Map size: {(config.max_x - config.min_x)/1000:.1f}km x {(config.max_y - config.min_y)/1000:.1f}km")
-    if config.rotation_deg != 0:
-        print(f"Rotation: {config.rotation_deg}° clockwise")
+    config, multi_map = result
 
+    # === Country detection (runs for both single and multi-map) ===
     # Check if data directory exists and has required files
     dem_path = config.data_path / "elevation.tif"
     data_missing = not config.data_path.exists() or not dem_path.exists()
@@ -4339,8 +4920,24 @@ def main():
             print(f"  indonesia, malaysia-singapore-brunei, vietnam, thailand")
             print(f"{'='*60}")
             return
-    else:
-        # Primary data exists - check for missing adjacent squares needed for rotation/shifting
+
+    # Handle multi-map generation
+    if multi_map is not None:
+        generate_multi_map_cluster(config, multi_map)
+        return
+
+    # Single map generation
+    print("=" * 60)
+    print(f"Tactical Map Generator: {config.name}")
+    print("=" * 60)
+    print(f"Center: {config.center_lat:.4f}°N, {config.center_lon:.4f}°E")
+    print(f"Grid: {GRID_WIDTH} x {GRID_HEIGHT} hexes @ {HEX_SIZE_M}m")
+    print(f"Map size: {(config.max_x - config.min_x)/1000:.1f}km x {(config.max_y - config.min_y)/1000:.1f}km")
+    if config.rotation_deg != 0:
+        print(f"Rotation: {config.rotation_deg}° clockwise")
+
+    # For single maps, check for missing adjacent squares needed for rotation/shifting
+    if not data_missing:
         needed_squares = get_mgrs_squares_for_bounds(config.data_bounds)
         available_paths = get_all_data_paths(config)
         available_squares = [str(p).replace("data/", "") for p in available_paths]
