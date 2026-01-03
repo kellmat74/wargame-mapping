@@ -49,7 +49,7 @@ GEOFABRIK_DIR = DATA_DIR / "geofabrik"
 DEFAULTS_FILE = Path("map_defaults.json")
 
 # === Version ===
-VERSION = "v2.1.3"
+VERSION = "v2.1.2"
 
 
 def load_map_defaults() -> dict:
@@ -191,24 +191,12 @@ MGRS_NORTHING_LABEL_COLOR = "#4169e1"  # Light blue for northing labels
 MGRS_GRID_WIDTH_M = 3             # MGRS grid line width in meters
 MGRS_LABEL_SIZE_M = 80            # MGRS label font size in meters
 
-HEX_GRID_COLOR = "#5e5959"        # Grey for hex grid (default/low elevation)
-HEX_GRID_COLOR_HIGH = "#b0b0b0"   # Lighter grey for high elevation areas
+HEX_GRID_COLOR = "#5e5959"        # Grey for hex grid
 HEX_GRID_WIDTH_M = 5              # Hex line width in meters
 HEX_GRID_OPACITY = 0.5            # Hex grid opacity (50%)
 HEX_SPINE_LENGTH = 0.18           # Spine length as fraction of edge (0.18 = 18%)
 HEX_LABEL_SIZE_M = 25             # Hex label font size in meters
 HEX_MARKER_RADIUS_M = 12          # Hex center circle radius in meters
-
-# Adaptive hex grid colors by elevation band (0=lowest, 5=highest)
-# Darker colors for lower elevations, lighter colors for higher elevations
-HEX_GRID_COLORS_BY_BAND = {
-    0: "#5e5959",  # Dark grey - lowest elevation (light background)
-    1: "#5e5959",  # Dark grey
-    2: "#707070",  # Medium grey
-    3: "#909090",  # Lighter grey
-    4: "#a8a8a8",  # Light grey
-    5: "#c0c0c0",  # Very light grey - highest elevation (dark background)
-}
 
 # Print layout settings (from config or fallback)
 _print = _defaults.get("print", {})
@@ -1897,7 +1885,7 @@ def generate_game_overlays(
 
     print(f"    Created {shading_count} hillside shading bands (hidden)")
 
-    return layer_elevation, layer_hillside, elevation_bands
+    return layer_elevation, layer_hillside
 
 
 def merge_road_segments(roads: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -2830,7 +2818,7 @@ def render_tactical_svg(
     print("  Generating hidden game overlay layers...")
     # Calculate rotation center in SVG coordinates (center of trim area)
     rot_center_svg = (content_offset_m + trim_width_m / 2, content_offset_m + trim_height_m / 2)
-    layer_game_elevation, layer_game_hillside, elevation_bands = generate_game_overlays(
+    layer_game_elevation, layer_game_hillside = generate_game_overlays(
         hexes=hexes,
         grid=grid,
         dwg=dwg,
@@ -3757,12 +3745,11 @@ def render_tactical_svg(
 
     # Layer 7: Hex grid overlay - spine style (short lines at vertices)
     # Instead of full hex outlines, draw short "spines" radiating from each vertex
-    # Uses adaptive coloring based on elevation band (lighter on higher elevation)
-    print("  Rendering hex grid (spine style with adaptive colors)...")
+    print("  Rendering hex grid (spine style)...")
 
-    # Collect all unique vertices, their connected edges, and which hexes share them
+    # Collect all unique vertices and their connected edges
     # Each vertex is shared by up to 3 hexes, and has 3 edges meeting there
-    vertex_data = {}  # vertex_key -> {'edges': set of edge directions, 'hexes': set of (q,r)}
+    vertex_edges = {}  # vertex_key -> set of edge directions
 
     for h in hexes:
         poly = grid.hex_polygon(h.q, h.r)
@@ -3772,34 +3759,22 @@ def render_tactical_svg(
             # Round coordinates to avoid floating point key issues
             vkey = (round(x, 3), round(y, 3))
 
-            if vkey not in vertex_data:
-                vertex_data[vkey] = {'edges': set(), 'hexes': set()}
-
-            # Track which hex this vertex belongs to
-            vertex_data[vkey]['hexes'].add((h.q, h.r))
+            if vkey not in vertex_edges:
+                vertex_edges[vkey] = set()
 
             # Get the two adjacent vertices (previous and next)
             prev_coord = coords[(i - 1) % 6]
             next_coord = coords[(i + 1) % 6]
 
             # Store normalized edge directions (as endpoint coordinates)
-            vertex_data[vkey]['edges'].add((round(prev_coord[0], 3), round(prev_coord[1], 3)))
-            vertex_data[vkey]['edges'].add((round(next_coord[0], 3), round(next_coord[1], 3)))
+            vertex_edges[vkey].add((round(prev_coord[0], 3), round(prev_coord[1], 3)))
+            vertex_edges[vkey].add((round(next_coord[0], 3), round(next_coord[1], 3)))
 
-    # Draw spines at each vertex with adaptive color based on max elevation of surrounding hexes
-    for (vx, vy), data in vertex_data.items():
+    # Draw spines at each vertex
+    for (vx, vy), adjacent_vertices in vertex_edges.items():
         svg_vx, svg_vy = to_svg(vx, vy)
 
-        # Get max elevation band of hexes sharing this vertex (darker background = need lighter color)
-        max_band = 0
-        for (q, r) in data['hexes']:
-            band = elevation_bands.get((q, r), 0)
-            max_band = max(max_band, band)
-
-        # Select color based on elevation band
-        spine_color = HEX_GRID_COLORS_BY_BAND.get(max_band, HEX_GRID_COLOR)
-
-        for (ax, ay) in data['edges']:
+        for (ax, ay) in adjacent_vertices:
             # Calculate spine endpoint (fraction of distance toward adjacent vertex)
             spine_x = vx + (ax - vx) * HEX_SPINE_LENGTH
             spine_y = vy + (ay - vy) * HEX_SPINE_LENGTH
@@ -3808,22 +3783,17 @@ def render_tactical_svg(
             layer_hex_grid.add(dwg.line(
                 start=(svg_vx, svg_vy),
                 end=(svg_sx, svg_sy),
-                stroke=spine_color,
+                stroke=HEX_GRID_COLOR,
                 stroke_width=HEX_GRID_WIDTH_M,
                 stroke_opacity=HEX_GRID_OPACITY,
                 stroke_linecap="round",
             ))
 
     # Layer 7: Hex markers (center circles) and labels
-    # Uses adaptive coloring based on elevation band (lighter on higher elevation)
-    print("  Rendering hex markers and labels (with adaptive colors)...")
+    print("  Rendering hex markers and labels...")
 
     for h in hexes:
         cx, cy = grid.axial_to_world(h.q, h.r)
-
-        # Get elevation band for this hex to determine color
-        hex_band = elevation_bands.get((h.q, h.r), 0)
-        hex_color = HEX_GRID_COLORS_BY_BAND.get(hex_band, HEX_GRID_COLOR)
 
         # Center circle for terrain marker (open, no fill)
         center_svg_x, center_svg_y = to_svg(cx, cy)
@@ -3831,7 +3801,7 @@ def render_tactical_svg(
             center=(center_svg_x, center_svg_y),
             r=HEX_MARKER_RADIUS_M,
             fill="none",
-            stroke=hex_color,
+            stroke=HEX_GRID_COLOR,
             stroke_width=HEX_GRID_WIDTH_M,
             stroke_opacity=HEX_GRID_OPACITY,
         ))
@@ -3851,7 +3821,7 @@ def render_tactical_svg(
             insert=(svg_x, svg_y),
             text_anchor="middle",
             font_size=HEX_LABEL_SIZE_M,
-            fill=hex_color,
+            fill=HEX_GRID_COLOR,
             font_family="sans-serif",
             opacity=HEX_GRID_OPACITY,
         ))
