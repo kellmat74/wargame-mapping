@@ -507,6 +507,21 @@ def generate_game_hex_labels(
         # Format label as XX.YY (1-indexed)
         label_text = f"{q + 1:02d}.{r + 1:02d}"
 
+        # Halo text (white stroke behind label for visibility on dark backgrounds)
+        halo = ET.SubElement(group, 'text', {
+            'x': str(cx),
+            'y': str(label_y),
+            'text-anchor': 'middle',
+            'font-family': 'Arial, sans-serif',
+            'font-size': str(label_size_m),
+            'fill': 'none',
+            'stroke': '#e8e8e8',
+            'stroke-width': '3',
+            'stroke-opacity': '0.4',
+        })
+        halo.text = label_text
+
+        # Label text on top
         text = ET.SubElement(group, 'text', {
             'x': str(cx),
             'y': str(label_y),

@@ -49,7 +49,7 @@ GEOFABRIK_DIR = DATA_DIR / "geofabrik"
 DEFAULTS_FILE = Path("map_defaults.json")
 
 # === Version ===
-VERSION = "v2.1.2"
+VERSION = "v2.1.3"
 
 
 def load_map_defaults() -> dict:
@@ -197,6 +197,11 @@ HEX_GRID_OPACITY = 0.5            # Hex grid opacity (50%)
 HEX_SPINE_LENGTH = 0.18           # Spine length as fraction of edge (0.18 = 18%)
 HEX_LABEL_SIZE_M = 25             # Hex label font size in meters
 HEX_MARKER_RADIUS_M = 12          # Hex center circle radius in meters
+
+# Halo settings for hex grid visibility on dark backgrounds
+HEX_HALO_COLOR = "#e8e8e8"        # Off-white halo for contrast
+HEX_HALO_WIDTH_M = 6              # Halo stroke width (wider than grid lines)
+HEX_HALO_OPACITY = 0.4            # Halo opacity (subtle but visible)
 
 # Print layout settings (from config or fallback)
 _print = _defaults.get("print", {})
@@ -3770,12 +3775,30 @@ def render_tactical_svg(
             vertex_edges[vkey].add((round(prev_coord[0], 3), round(prev_coord[1], 3)))
             vertex_edges[vkey].add((round(next_coord[0], 3), round(next_coord[1], 3)))
 
-    # Draw spines at each vertex
+    # Draw spines at each vertex (halos first, then spines on top)
+    # First pass: draw all halos (white, wider lines for visibility on dark backgrounds)
     for (vx, vy), adjacent_vertices in vertex_edges.items():
         svg_vx, svg_vy = to_svg(vx, vy)
 
         for (ax, ay) in adjacent_vertices:
-            # Calculate spine endpoint (fraction of distance toward adjacent vertex)
+            spine_x = vx + (ax - vx) * HEX_SPINE_LENGTH
+            spine_y = vy + (ay - vy) * HEX_SPINE_LENGTH
+            svg_sx, svg_sy = to_svg(spine_x, spine_y)
+
+            layer_hex_grid.add(dwg.line(
+                start=(svg_vx, svg_vy),
+                end=(svg_sx, svg_sy),
+                stroke=HEX_HALO_COLOR,
+                stroke_width=HEX_HALO_WIDTH_M,
+                stroke_opacity=HEX_HALO_OPACITY,
+                stroke_linecap="round",
+            ))
+
+    # Second pass: draw all spines on top of halos
+    for (vx, vy), adjacent_vertices in vertex_edges.items():
+        svg_vx, svg_vy = to_svg(vx, vy)
+
+        for (ax, ay) in adjacent_vertices:
             spine_x = vx + (ax - vx) * HEX_SPINE_LENGTH
             spine_y = vy + (ay - vy) * HEX_SPINE_LENGTH
             svg_sx, svg_sy = to_svg(spine_x, spine_y)
@@ -3790,8 +3813,43 @@ def render_tactical_svg(
             ))
 
     # Layer 7: Hex markers (center circles) and labels
+    # Draw halos first, then markers/labels on top
     print("  Rendering hex markers and labels...")
 
+    # First pass: draw all marker halos and label halos
+    for h in hexes:
+        cx, cy = grid.axial_to_world(h.q, h.r)
+        center_svg_x, center_svg_y = to_svg(cx, cy)
+
+        # Marker halo (wider white circle)
+        layer_hex_markers.add(dwg.circle(
+            center=(center_svg_x, center_svg_y),
+            r=HEX_MARKER_RADIUS_M,
+            fill="none",
+            stroke=HEX_HALO_COLOR,
+            stroke_width=HEX_HALO_WIDTH_M,
+            stroke_opacity=HEX_HALO_OPACITY,
+        ))
+
+        # Label halo (white stroke behind text)
+        top_offset = grid.size * math.sqrt(3) / 2 * 0.80
+        svg_x, svg_y = to_svg(cx, cy + top_offset)
+        svg_y += HEX_LABEL_SIZE_M * 0.35
+        label = f"{h.q + 1:02d}.{h.r + 1:02d}"
+
+        layer_hex_labels.add(dwg.text(
+            label,
+            insert=(svg_x, svg_y),
+            text_anchor="middle",
+            font_size=HEX_LABEL_SIZE_M,
+            fill="none",
+            stroke=HEX_HALO_COLOR,
+            stroke_width=HEX_HALO_WIDTH_M * 0.5,  # Thinner halo for text
+            stroke_opacity=HEX_HALO_OPACITY,
+            font_family="sans-serif",
+        ))
+
+    # Second pass: draw markers and labels on top
     for h in hexes:
         cx, cy = grid.axial_to_world(h.q, h.r)
 
