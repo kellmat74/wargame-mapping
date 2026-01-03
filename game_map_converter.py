@@ -74,29 +74,33 @@ ELEVATION_BAND_INTERVAL = 100  # meters per band
 ELEVATION_BAND_MAX = 6         # maximum band number
 
 
-def calculate_relative_elevation_bands(hex_data: dict) -> dict:
+def calculate_relative_elevation_bands(hex_data: dict, band_interval: int = None) -> dict:
     """
     Calculate elevation bands relative to the map's minimum elevation.
 
-    Uses 100m intervals from the lowest point on the map:
-    - Band 0: min_elev to min_elev + 100m (no tint)
-    - Band 1: +100m to +200m
-    - Band 2: +200m to +300m
+    Uses configurable intervals from the lowest point on the map:
+    - Band 0: min_elev to min_elev + interval (no tint)
+    - Band 1: +interval to +2*interval
+    - Band 2: +2*interval to +3*interval
     - etc., capped at band 6
 
     Args:
         hex_data: Hex data from JSON with 'elevation' field per hex
+        band_interval: Meters per elevation band (default: ELEVATION_BAND_INTERVAL)
 
     Returns:
         Dict mapping (q, r) to relative elevation band (0-6)
     """
+    if band_interval is None:
+        band_interval = ELEVATION_BAND_INTERVAL
+
     # Find minimum elevation
     elevations = [h.get('elevation', 0) for h in hex_data['hexes']]
     min_elev = min(elevations)
     max_elev = max(elevations)
 
     print(f"  Elevation range: {min_elev:.0f}m - {max_elev:.0f}m ({max_elev - min_elev:.0f}m relief)")
-    print(f"  Using {ELEVATION_BAND_INTERVAL}m intervals from base ({min_elev:.0f}m)")
+    print(f"  Using {band_interval}m intervals from base ({min_elev:.0f}m)")
 
     # Calculate relative bands
     bands = {}
@@ -107,7 +111,7 @@ def calculate_relative_elevation_bands(hex_data: dict) -> dict:
         elev = hex_info.get('elevation', 0)
 
         # Calculate band: floor((elev - min) / interval), capped at max
-        band = int((elev - min_elev) / ELEVATION_BAND_INTERVAL)
+        band = int((elev - min_elev) / band_interval)
         band = min(band, ELEVATION_BAND_MAX)
 
         bands[(q, r)] = band
@@ -115,8 +119,8 @@ def calculate_relative_elevation_bands(hex_data: dict) -> dict:
 
     # Log band distribution
     for b in sorted(band_counts.keys()):
-        low = min_elev + b * ELEVATION_BAND_INTERVAL
-        high = min_elev + (b + 1) * ELEVATION_BAND_INTERVAL if b < ELEVATION_BAND_MAX else float('inf')
+        low = min_elev + b * band_interval
+        high = min_elev + (b + 1) * band_interval if b < ELEVATION_BAND_MAX else float('inf')
         high_str = f"{high:.0f}" if high != float('inf') else "+"
         print(f"    Band {b} ({low:.0f}-{high_str}m): {band_counts[b]} hexes")
 
@@ -1306,8 +1310,19 @@ def convert_single_sheet(
         # Fallback for older maps without pre-generated overlays: generate them here
         print("  Pre-generated overlays not found, generating (fallback for older maps)...")
 
+        # Get elevation band interval from hexdata metadata (or use default for older maps)
+        band_interval_config = hex_data.get('metadata', {}).get('elevation_band_interval', 'auto')
+        if str(band_interval_config).lower() == 'auto':
+            # For fallback generation with auto, use default interval
+            band_interval = ELEVATION_BAND_INTERVAL
+        else:
+            try:
+                band_interval = int(band_interval_config)
+            except (ValueError, TypeError):
+                band_interval = ELEVATION_BAND_INTERVAL
+
         print("\nCalculating relative elevation bands...")
-        elevation_bands = calculate_relative_elevation_bands(hex_data)
+        elevation_bands = calculate_relative_elevation_bands(hex_data, band_interval)
 
         # Generate elevation overlays
         elevation_intensity = config.get('elevation_intensity', 1.0)

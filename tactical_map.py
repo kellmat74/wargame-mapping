@@ -49,7 +49,7 @@ GEOFABRIK_DIR = DATA_DIR / "geofabrik"
 DEFAULTS_FILE = Path("map_defaults.json")
 
 # === Version ===
-VERSION = "v2.1.3"
+VERSION = "v2.1.4"
 
 
 def load_map_defaults() -> dict:
@@ -324,8 +324,33 @@ ELEVATION_TINT_OPACITY = {
     6: 0.60,   # +600m+ - 60% darker (max)
 }
 
-ELEVATION_BAND_INTERVAL = 100  # meters per elevation band
+ELEVATION_BAND_INTERVAL = 100  # meters per elevation band (default)
 ELEVATION_BAND_MAX = 6         # maximum band number
+
+
+def calculate_auto_interval(min_elev: float, max_elev: float, target_bands: int = 4) -> int:
+    """
+    Calculate elevation band interval to achieve approximately target_bands bands.
+
+    Args:
+        min_elev: Minimum elevation in meters
+        max_elev: Maximum elevation in meters
+        target_bands: Target number of bands (default 4)
+
+    Returns:
+        Band interval in meters, rounded to a "nice" value
+    """
+    relief = max_elev - min_elev
+    if relief <= 0:
+        return 100  # fallback for flat terrain
+
+    # Calculate raw interval needed for target bands
+    raw_interval = relief / target_bands
+
+    # Round to nice intervals
+    nice_intervals = [25, 50, 75, 100, 125, 150, 200, 250, 300, 400, 500]
+    return min(nice_intervals, key=lambda x: abs(x - raw_interval))
+
 
 # Hillside shading colors (darker versions of terrain base colors)
 HILLSIDE_COLORS = {
@@ -359,6 +384,7 @@ class MapConfig:
     country: str = ""  # e.g., "Japan", "Taiwan", "Philippines" - for output folder organization
     rotation_deg: float = 0  # Map rotation in degrees (positive = clockwise)
     timestamp: str = ""  # Version timestamp for output folder (YYYY-MM-DD_HH-MM)
+    elevation_band_interval: str = "auto"  # Meters per band, or "auto" for automatic calculation
 
     # Computed values (set by calculate_bounds)
     center_x: float = 0
@@ -890,6 +916,7 @@ def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
             country=base_config.country,
             rotation_deg=base_config.rotation_deg,
             timestamp=base_config.timestamp,  # Use same timestamp for cluster
+            elevation_band_interval=base_config.elevation_band_interval,
         )
 
         # Generate this sheet with cluster-wide elevation base and shared edge info
@@ -1138,7 +1165,7 @@ def generate_single_sheet(
 
     # Render SVG
     svg_path = actual_output / f"{config.name}_tactical.svg"
-    render_tactical_svg(grid, hexes, contours, roads, buildings, landcover, mgrs_grid, config, svg_path, enhanced_features, dem, cluster_min_elevation, shared_edges)
+    actual_band_interval = render_tactical_svg(grid, hexes, contours, roads, buildings, landcover, mgrs_grid, config, svg_path, enhanced_features, dem, cluster_min_elevation, shared_edges)
 
     # Save hex data
     json_path = actual_output / f"{config.name}_hexdata.json"
@@ -1155,6 +1182,7 @@ def generate_single_sheet(
             "country": config.country,
             "region": config.region,
             "rotation_deg": config.rotation_deg,
+            "elevation_band_interval": actual_band_interval,
         },
         "hexes": [
             {
@@ -1592,6 +1620,7 @@ def generate_game_overlays(
     dem_crs=None,
     grid_crs=None,
     cluster_min_elevation: float = None,
+    elevation_band_interval: int = None,
 ):
     """
     Generate hidden elevation overlay and hillside shading layers.
@@ -1617,10 +1646,25 @@ def generate_game_overlays(
         dem: DEM raster for elevation sampling (required for rotated maps)
         dem_crs: CRS of the DEM
         grid_crs: CRS of the grid (UTM)
+        elevation_band_interval: Meters per elevation band (default: ELEVATION_BAND_INTERVAL)
 
     Returns:
-        Tuple of (elevation_overlay_group, hillside_shading_group)
+        Tuple of (elevation_overlay_group, hillside_shading_group, band_interval)
+        band_interval is the actual interval used (calculated if auto)
     """
+    # Parse elevation band interval - can be None, "auto", or a number
+    # Actual calculation happens after we know the elevation range
+    auto_interval = False
+    if elevation_band_interval is None or str(elevation_band_interval).lower() == 'auto':
+        auto_interval = True
+        band_interval = ELEVATION_BAND_INTERVAL  # Temporary, will be recalculated
+    else:
+        try:
+            band_interval = int(elevation_band_interval)
+        except (ValueError, TypeError):
+            auto_interval = True
+            band_interval = ELEVATION_BAND_INTERVAL
+
     # For rotated maps, we need to sample elevation at the terrain position
     # that will "slide into" each hex after rotation (the transparency sheet model)
     if rotation_deg != 0 and dem is not None and rot_center_svg is not None:
@@ -1678,11 +1722,16 @@ def generate_game_overlays(
             min_elev = local_min_elev
             print(f"  Game overlays - Rotated elevation range: {min_elev:.0f}m - {max_elev:.0f}m ({max_elev - min_elev:.0f}m relief)")
 
+        # Calculate auto interval if needed
+        if auto_interval:
+            band_interval = calculate_auto_interval(min_elev, max_elev)
+            print(f"    Auto band interval: {band_interval}m (targeting ~4 bands)")
+
         # Build elevation band lookup from rotated elevations
         elevation_bands = {}
         for h in hexes:
             elev = rotated_elevations.get((h.q, h.r), 0)
-            band = int((elev - min_elev) / ELEVATION_BAND_INTERVAL)
+            band = int((elev - min_elev) / band_interval)
             band = min(band, ELEVATION_BAND_MAX)
             elevation_bands[(h.q, h.r)] = band
     else:
@@ -1699,10 +1748,15 @@ def generate_game_overlays(
             min_elev = local_min_elev
             print(f"  Game overlays - Elevation range: {min_elev:.0f}m - {max_elev:.0f}m ({max_elev - min_elev:.0f}m relief)")
 
+        # Calculate auto interval if needed
+        if auto_interval:
+            band_interval = calculate_auto_interval(min_elev, max_elev)
+            print(f"    Auto band interval: {band_interval}m (targeting ~4 bands)")
+
         # Build elevation band lookup
         elevation_bands = {}
         for h in hexes:
-            band = int((h.elevation_avg - min_elev) / ELEVATION_BAND_INTERVAL)
+            band = int((h.elevation_avg - min_elev) / band_interval)
             band = min(band, ELEVATION_BAND_MAX)
             elevation_bands[(h.q, h.r)] = band
 
@@ -1890,7 +1944,7 @@ def generate_game_overlays(
 
     print(f"    Created {shading_count} hillside shading bands (hidden)")
 
-    return layer_elevation, layer_hillside
+    return layer_elevation, layer_hillside, band_interval
 
 
 def merge_road_segments(roads: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -2823,7 +2877,7 @@ def render_tactical_svg(
     print("  Generating hidden game overlay layers...")
     # Calculate rotation center in SVG coordinates (center of trim area)
     rot_center_svg = (content_offset_m + trim_width_m / 2, content_offset_m + trim_height_m / 2)
-    layer_game_elevation, layer_game_hillside = generate_game_overlays(
+    layer_game_elevation, layer_game_hillside, actual_band_interval = generate_game_overlays(
         hexes=hexes,
         grid=grid,
         dwg=dwg,
@@ -2838,6 +2892,7 @@ def render_tactical_svg(
         dem_crs=dem.crs if dem else None,
         grid_crs=GRID_CRS,
         cluster_min_elevation=cluster_min_elevation,
+        elevation_band_interval=config.elevation_band_interval,
     )
 
     # Map terrain types to their layer groups
@@ -4187,59 +4242,67 @@ def render_tactical_svg(
     # This area will NOT be printed - it's for artist reference in the SVG
     data_block_y = DATA_FONT_SIZE_M + 20  # Start near top of data margin area
 
-    # Left column: MGRS and coordinate data
-    left_col_x = DATA_FONT_SIZE_M
+    # Calculate elevation range from hexes for display
+    hex_elevations = [h.elevation_avg for h in hexes]
+    min_elevation = min(hex_elevations) if hex_elevations else 0
+    max_elevation = max(hex_elevations) if hex_elevations else 0
 
+    # Six columns across the top data margin area
+    col1_x = DATA_FONT_SIZE_M                      # MAP CENTER
+    col2_x = viewbox_width_with_bleed * 0.15       # GRID INFO
+    col3_x = viewbox_width_with_bleed * 0.28       # MAP SETTINGS
+    col4_x = viewbox_width_with_bleed * 0.42       # PRINT LAYOUT
+    col5_x = viewbox_width_with_bleed * 0.56       # CORNERS
+    col6_x = viewbox_width_with_bleed * 0.76       # ELEVATION
+
+    # Column 1: MAP CENTER
     layer_map_data.add(dwg.text(
         "MAP CENTER",
-        insert=(left_col_x, data_block_y),
+        insert=(col1_x, data_block_y),
         font_size=DATA_FONT_SIZE_M * 1.1,
         font_weight="bold",
         fill="#cccccc",
         font_family="monospace",
     ))
 
-    # Country and map name line
     map_title = f"{config.country}: {config.name}" if config.country else config.name
     layer_map_data.add(dwg.text(
         map_title,
-        insert=(left_col_x, data_block_y + DATA_LINE_HEIGHT_M),
+        insert=(col1_x, data_block_y + DATA_LINE_HEIGHT_M),
         font_size=DATA_FONT_SIZE_M,
         font_weight="bold",
-        fill="#00d4ff",  # Cyan to stand out
+        fill="#00d4ff",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
         f"MGRS: {mgrs_formatted}",
-        insert=(left_col_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
+        insert=(col1_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
         font_size=DATA_FONT_SIZE_M,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
-        f"LAT: {config.center_lat:.5f}  LNG: {config.center_lon:.5f}",
-        insert=(left_col_x, data_block_y + DATA_LINE_HEIGHT_M * 3),
+        f"LAT: {config.center_lat:.5f}",
+        insert=(col1_x, data_block_y + DATA_LINE_HEIGHT_M * 3),
         font_size=DATA_FONT_SIZE_M,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
-        f"Easting: {center_utm_e:.0f}  Northing: {center_utm_n:.0f}",
-        insert=(left_col_x, data_block_y + DATA_LINE_HEIGHT_M * 4),
+        f"LNG: {config.center_lon:.5f}",
+        insert=(col1_x, data_block_y + DATA_LINE_HEIGHT_M * 4),
         font_size=DATA_FONT_SIZE_M,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
-    # Middle column: Grid info (positioned in data margin area)
-    mid_col_x = viewbox_width_with_bleed * 0.35
-
+    # Column 2: GRID INFO
     layer_map_data.add(dwg.text(
         "GRID INFO",
-        insert=(mid_col_x, data_block_y),
+        insert=(col2_x, data_block_y),
         font_size=DATA_FONT_SIZE_M * 1.1,
         font_weight="bold",
         fill="#cccccc",
@@ -4247,16 +4310,16 @@ def render_tactical_svg(
     ))
 
     layer_map_data.add(dwg.text(
-        f"Grid: {GRID_WIDTH} x {GRID_HEIGHT} hexes @ {HEX_SIZE_M}m",
-        insert=(mid_col_x, data_block_y + DATA_LINE_HEIGHT_M),
+        f"{GRID_WIDTH}x{GRID_HEIGHT} @ {HEX_SIZE_M}m",
+        insert=(col2_x, data_block_y + DATA_LINE_HEIGHT_M),
         font_size=DATA_FONT_SIZE_M,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
-        f"Coverage: {(config.max_x - config.min_x)/1000:.1f}km x {(config.max_y - config.min_y)/1000:.1f}km",
-        insert=(mid_col_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
+        f"{(config.max_x - config.min_x)/1000:.1f}x{(config.max_y - config.min_y)/1000:.1f}km",
+        insert=(col2_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
         font_size=DATA_FONT_SIZE_M,
         fill="#aaaaaa",
         font_family="monospace",
@@ -4267,41 +4330,142 @@ def render_tactical_svg(
         if bearing_at_top < 0:
             bearing_at_top += 360
         layer_map_data.add(dwg.text(
-            f"Bearing at Top: {bearing_at_top:.0f}°",
-            insert=(mid_col_x, data_block_y + DATA_LINE_HEIGHT_M * 3),
+            f"Bearing: {bearing_at_top:.0f}°",
+            insert=(col2_x, data_block_y + DATA_LINE_HEIGHT_M * 3),
             font_size=DATA_FONT_SIZE_M,
-            fill="#ffcc00",  # Yellow to highlight rotation
+            fill="#ffcc00",
             font_family="monospace",
         ))
 
-    # Right column: Corner coordinates (positioned in data margin area)
-    right_col_x = viewbox_width_with_bleed * 0.62
-
+    # Column 3: MAP SETTINGS
     layer_map_data.add(dwg.text(
-        "CORNER COORDINATES (WGS84)",
-        insert=(right_col_x, data_block_y),
+        "MAP SETTINGS",
+        insert=(col3_x, data_block_y),
         font_size=DATA_FONT_SIZE_M * 1.1,
         font_weight="bold",
         fill="#cccccc",
         font_family="monospace",
     ))
 
-    nw_lat, nw_lon = corners_wgs84["NW"]
-    ne_lat, ne_lon = corners_wgs84["NE"]
-    sw_lat, sw_lon = corners_wgs84["SW"]
-    se_lat, se_lon = corners_wgs84["SE"]
-
     layer_map_data.add(dwg.text(
-        f"NW: {nw_lat:.5f}, {nw_lon:.5f}    NE: {ne_lat:.5f}, {ne_lon:.5f}",
-        insert=(right_col_x, data_block_y + DATA_LINE_HEIGHT_M),
+        f"Contours: {CONTOUR_INTERVAL}m/{INDEX_CONTOUR_INTERVAL}m",
+        insert=(col3_x, data_block_y + DATA_LINE_HEIGHT_M),
         font_size=DATA_FONT_SIZE_M,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
-        f"SW: {sw_lat:.5f}, {sw_lon:.5f}    SE: {se_lat:.5f}, {se_lon:.5f}",
-        insert=(right_col_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
+        f"MGRS Grid: {MGRS_GRID_INTERVAL}m",
+        insert=(col3_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
+        font_size=DATA_FONT_SIZE_M,
+        fill="#aaaaaa",
+        font_family="monospace",
+    ))
+
+    # Column 4: PRINT LAYOUT
+    layer_map_data.add(dwg.text(
+        "PRINT LAYOUT",
+        insert=(col4_x, data_block_y),
+        font_size=DATA_FONT_SIZE_M * 1.1,
+        font_weight="bold",
+        fill="#cccccc",
+        font_family="monospace",
+    ))
+
+    layer_map_data.add(dwg.text(
+        f"Trim: {TRIM_WIDTH_IN}\"x{TRIM_HEIGHT_IN}\"",
+        insert=(col4_x, data_block_y + DATA_LINE_HEIGHT_M),
+        font_size=DATA_FONT_SIZE_M,
+        fill="#aaaaaa",
+        font_family="monospace",
+    ))
+
+    layer_map_data.add(dwg.text(
+        f"Bleed: {BLEED_INCHES}\"",
+        insert=(col4_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
+        font_size=DATA_FONT_SIZE_M,
+        fill="#aaaaaa",
+        font_family="monospace",
+    ))
+
+    layer_map_data.add(dwg.text(
+        f"Margin: {DATA_MARGIN_IN}\"",
+        insert=(col4_x, data_block_y + DATA_LINE_HEIGHT_M * 3),
+        font_size=DATA_FONT_SIZE_M,
+        fill="#aaaaaa",
+        font_family="monospace",
+    ))
+
+    # Column 5: CORNERS
+    nw_lat, nw_lon = corners_wgs84["NW"]
+    ne_lat, ne_lon = corners_wgs84["NE"]
+    sw_lat, sw_lon = corners_wgs84["SW"]
+    se_lat, se_lon = corners_wgs84["SE"]
+
+    layer_map_data.add(dwg.text(
+        "CORNERS (WGS84)",
+        insert=(col5_x, data_block_y),
+        font_size=DATA_FONT_SIZE_M * 1.1,
+        font_weight="bold",
+        fill="#cccccc",
+        font_family="monospace",
+    ))
+
+    layer_map_data.add(dwg.text(
+        f"NW: {nw_lat:.4f}, {nw_lon:.4f}",
+        insert=(col5_x, data_block_y + DATA_LINE_HEIGHT_M),
+        font_size=DATA_FONT_SIZE_M,
+        fill="#aaaaaa",
+        font_family="monospace",
+    ))
+
+    layer_map_data.add(dwg.text(
+        f"NE: {ne_lat:.4f}, {ne_lon:.4f}",
+        insert=(col5_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
+        font_size=DATA_FONT_SIZE_M,
+        fill="#aaaaaa",
+        font_family="monospace",
+    ))
+
+    layer_map_data.add(dwg.text(
+        f"SW: {sw_lat:.4f}, {sw_lon:.4f}",
+        insert=(col5_x, data_block_y + DATA_LINE_HEIGHT_M * 3),
+        font_size=DATA_FONT_SIZE_M,
+        fill="#aaaaaa",
+        font_family="monospace",
+    ))
+
+    layer_map_data.add(dwg.text(
+        f"SE: {se_lat:.4f}, {se_lon:.4f}",
+        insert=(col5_x, data_block_y + DATA_LINE_HEIGHT_M * 4),
+        font_size=DATA_FONT_SIZE_M,
+        fill="#aaaaaa",
+        font_family="monospace",
+    ))
+
+    # Column 6: ELEVATION
+    layer_map_data.add(dwg.text(
+        "ELEVATION",
+        insert=(col6_x, data_block_y),
+        font_size=DATA_FONT_SIZE_M * 1.1,
+        font_weight="bold",
+        fill="#cccccc",
+        font_family="monospace",
+    ))
+
+    layer_map_data.add(dwg.text(
+        f"Range: {min_elevation:.0f}-{max_elevation:.0f}m",
+        insert=(col6_x, data_block_y + DATA_LINE_HEIGHT_M),
+        font_size=DATA_FONT_SIZE_M,
+        fill="#aaaaaa",
+        font_family="monospace",
+    ))
+
+    band_interval_str = f"{actual_band_interval}m" if actual_band_interval else "auto"
+    layer_map_data.add(dwg.text(
+        f"Band: {band_interval_str}",
+        insert=(col6_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
         font_size=DATA_FONT_SIZE_M,
         fill="#aaaaaa",
         font_family="monospace",
@@ -4631,6 +4795,8 @@ def render_tactical_svg(
     save_time = time.time() - save_start
     print(f"  Saved to {output_path} ({save_time:.1f}s)", flush=True)
 
+    return actual_band_interval
+
 
 def load_config_from_file() -> Optional[Tuple[MapConfig, Optional[dict]]]:
     """Load configuration from map_config.json if it exists.
@@ -4662,6 +4828,7 @@ def load_config_from_file() -> Optional[Tuple[MapConfig, Optional[dict]]]:
         region=data.get("region", ""),
         country=data.get("country", ""),
         rotation_deg=data.get("rotation_deg", 0),
+        elevation_band_interval=data.get("elevation_band_interval", "auto"),
     )
 
     # Extract multi_map settings if present
@@ -5275,7 +5442,7 @@ def main():
 
     # Render SVG
     svg_path = config.output_path / f"{config.name}_tactical.svg"
-    render_tactical_svg(grid, hexes, contours, roads, buildings, landcover, mgrs_grid, config, svg_path, enhanced_features, dem)
+    actual_band_interval = render_tactical_svg(grid, hexes, contours, roads, buildings, landcover, mgrs_grid, config, svg_path, enhanced_features, dem)
 
     # Save hex data
     json_path = config.output_path / f"{config.name}_hexdata.json"
@@ -5292,6 +5459,7 @@ def main():
             "country": config.country,
             "region": config.region,
             "rotation_deg": config.rotation_deg,
+            "elevation_band_interval": actual_band_interval,
         },
         "hexes": [
             {

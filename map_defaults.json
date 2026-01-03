@@ -36,5 +36,10 @@
   "mgrs": {
     "grid_interval_m": 1000,
     "_help": "MGRS grid line interval in meters (1000 = 1km grid)"
+  },
+
+  "elevation": {
+    "band_interval": "auto",
+    "_help": "Elevation band interval in meters. Use 'auto' for automatic calculation (~4 bands), or a number (e.g., 50, 100, 150, 200)"
   }
 }

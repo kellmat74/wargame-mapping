@@ -958,6 +958,18 @@
                     </div>
                 </div>
 
+                <!-- Elevation Settings -->
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 10px; font-size: 12px; color: #aaa; text-transform: uppercase;">Elevation (Game Map)</label>
+                    <div class="input-group">
+                        <div class="input-field">
+                            <label>Band Interval (m)</label>
+                            <input type="text" id="elevationBandInterval" value="auto">
+                            <div class="region-info">"auto" for ~4 bands, or number (50, 100, 150...)</div>
+                        </div>
+                    </div>
+                </div>
+
                 <button class="generate-btn" onclick="saveSettings()" style="background-color: #2e7d32;">Save Settings</button>
                 <div class="region-info" style="margin-top: 10px;">Settings are saved to map_defaults.json. Server restart may be needed.</div>
             </div>
@@ -1048,6 +1060,9 @@
                 document.getElementById('playMarginBottom').value = defaults.play_margins?.bottom_in ?? 0.0;
                 document.getElementById('playMarginLeft').value = defaults.play_margins?.left_in ?? 0.0;
                 document.getElementById('playMarginRight').value = defaults.play_margins?.right_in ?? 0.0;
+
+                // Elevation settings
+                document.getElementById('elevationBandInterval').value = defaults.elevation?.band_interval ?? 'auto';
             } catch (error) {
                 console.error('Error loading settings:', error);
             }
@@ -1078,6 +1093,9 @@
                 },
                 mgrs: {
                     grid_interval_m: parseInt(document.getElementById('mgrsGridInterval').value)
+                },
+                elevation: {
+                    band_interval: document.getElementById('elevationBandInterval').value.trim() || 'auto'
                 }
             };
 
@@ -1954,6 +1972,10 @@ config = MapConfig(
                     overlap_hexes: 1
                 };
             }
+
+            // Add elevation band interval (read from settings input)
+            const elevationInput = document.getElementById('elevationBandInterval').value.trim();
+            config.elevation_band_interval = elevationInput || 'auto';
 
             // Show progress container
             const progressContainer = document.getElementById('progressContainer');
