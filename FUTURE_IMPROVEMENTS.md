@@ -21,6 +21,24 @@ Several debug scripts were created during contour/rotation troubleshooting. Cons
 
 ## Feature Enhancements
 
+### Adaptive Hex Grid Coloring - NEEDS TUNING (v2.1.3)
+**START HERE NEXT SESSION**
+
+Hex spines, center markers, and labels now use adaptive colors based on elevation
+band to remain visible against the darker elevation tint at higher elevations.
+User reports "close but not quite right" - needs visual review and tuning.
+
+Implementation complete in tactical_map.py:
+- `HEX_GRID_COLORS_BY_BAND` dict (lines 202-211) defines color ramp
+- Spine rendering uses max elevation band of surrounding hexes
+- Marker/label rendering uses hex's own elevation band
+
+Possible issues to investigate:
+- Color steps may not be aggressive enough (need more contrast)
+- May need to start lightening at a lower band (band 1 instead of 2?)
+- Opacity (currently 50%) interaction with color may need consideration
+- Compare against game map output to verify colors are visible
+
 ### Multi-Map Out-of-Play Frame ✓ IMPLEMENTED (v2.1.2)
 - Out-of-play frame now hidden on shared edges for multi-map clusters
 - Elevation overlay extended 2 hexes beyond playable area on ALL edges
