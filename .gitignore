@@ -33,3 +33,6 @@ debug_*.py
 diagnose_*.py
 test_contour_alignment.py
 game_map_config.html
+
+# Reference images (local only)
+Reference Files/
