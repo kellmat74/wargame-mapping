@@ -10,6 +10,8 @@ A tactical hex-based wargame map generator that creates US Army military-style m
 - Auto-downloads geographic data from OSM/SRTM
 - Outputs SVG files for editing in Affinity Designer/Illustrator
 
+**Repository:** https://github.com/kellmat74/wargame-mapping
+
 ## Architecture
 
 ### Core Files
