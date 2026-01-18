@@ -36,6 +36,9 @@ GEOFABRIK_CONTINENTS = {
     # Europe
     "ukraine": "europe",
     "poland": "europe",
+    "lithuania": "europe",
+    "latvia": "europe",
+    "estonia": "europe",
     "germany": "europe",
     "france": "europe",
     "spain": "europe",

@@ -46,10 +46,11 @@ from render_helpers import (
 DATA_DIR = Path("data")
 OUTPUT_DIR = Path("output")
 GEOFABRIK_DIR = DATA_DIR / "geofabrik"
+TILE_CACHE_DIR = DATA_DIR / "tile_cache"  # Cache for reference tiles
 DEFAULTS_FILE = Path("map_defaults.json")
 
 # === Version ===
-VERSION = "v2.1.4"
+VERSION = "v2.1.5"
 
 
 def load_map_defaults() -> dict:
@@ -385,6 +386,9 @@ class MapConfig:
     rotation_deg: float = 0  # Map rotation in degrees (positive = clockwise)
     timestamp: str = ""  # Version timestamp for output folder (YYYY-MM-DD_HH-MM)
     elevation_band_interval: str = "auto"  # Meters per band, or "auto" for automatic calculation
+    hex_size_m: float = 250  # Hex size in meters (flat edge to flat edge)
+    contour_interval: float = 20  # Contour line interval in meters
+    index_contour_interval: float = 100  # Index (bold) contour interval in meters
 
     # Computed values (set by calculate_bounds)
     center_x: float = 0
@@ -452,10 +456,10 @@ class MapConfig:
             self.center_lon, self.center_lat
         )
 
-        # Calculate hex geometry
-        size = HEX_SIZE_M / math.sqrt(3)  # center to vertex
+        # Calculate hex geometry using instance hex_size_m
+        size = self.hex_size_m / math.sqrt(3)  # center to vertex
         col_spacing = 1.5 * size
-        row_spacing = HEX_SIZE_M
+        row_spacing = self.hex_size_m
 
         # Map dimensions in meters
         # Width: leftmost vertex to rightmost vertex
@@ -500,10 +504,10 @@ class MapConfig:
         self.center_x += east_m
         self.center_y += north_m
 
-        # Recalculate bounds
-        size = HEX_SIZE_M / math.sqrt(3)
+        # Recalculate bounds using instance hex_size_m
+        size = self.hex_size_m / math.sqrt(3)
         col_spacing = 1.5 * size
-        row_spacing = HEX_SIZE_M
+        row_spacing = self.hex_size_m
 
         width_m = (GRID_WIDTH - 1) * col_spacing + 2 * size
         # Height: For offset hex grids, odd columns are shifted down by row_spacing/2
@@ -594,16 +598,20 @@ class MapConfig:
 
 # === Multi-Map Generation Functions ===
 
-def calculate_map_dimensions() -> Tuple[float, float]:
+def calculate_map_dimensions(hex_size_m: float = None) -> Tuple[float, float]:
     """
     Calculate single map dimensions in meters based on hex grid constants.
+
+    Args:
+        hex_size_m: Hex size in meters. If None, uses global HEX_SIZE_M.
 
     Returns:
         Tuple of (width_m, height_m)
     """
-    size = HEX_SIZE_M / math.sqrt(3)  # center to vertex
+    hex_size = hex_size_m if hex_size_m is not None else HEX_SIZE_M
+    size = hex_size / math.sqrt(3)  # center to vertex
     col_spacing = 1.5 * size
-    row_spacing = HEX_SIZE_M
+    row_spacing = hex_size
 
     width_m = (GRID_WIDTH - 1) * col_spacing + 2 * size
     height_m = GRID_HEIGHT * row_spacing + row_spacing / 2
@@ -617,7 +625,8 @@ def calculate_adjacent_centers(
     rotation_deg: float,
     count: int,
     orientation: str,
-    overlap_hexes: int = 1
+    overlap_hexes: int = 1,
+    hex_size_m: float = None
 ) -> List[Tuple[str, float, float]]:
     """
     Calculate center coordinates for all sheets in a multi-map layout.
@@ -632,6 +641,7 @@ def calculate_adjacent_centers(
         count: Number of maps (1, 2, or 4)
         orientation: 'single', 'short_edge' (side-by-side), 'long_edge' (stacked), or 'grid' (2x2)
         overlap_hexes: Number of hex columns/rows shared between adjacent maps (default 1)
+        hex_size_m: Hex size in meters. If None, uses global HEX_SIZE_M.
 
     Returns:
         List of (sheet_name, lat, lon) tuples
@@ -650,13 +660,16 @@ def calculate_adjacent_centers(
     if count == 1 or orientation == 'single':
         return [('', center_lat, center_lon)]
 
+    # Use provided hex_size_m or fall back to global
+    hex_size = hex_size_m if hex_size_m is not None else HEX_SIZE_M
+
     # Calculate map dimensions
-    width_m, height_m = calculate_map_dimensions()
+    width_m, height_m = calculate_map_dimensions(hex_size)
 
     # Calculate overlap offset in meters
-    size = HEX_SIZE_M / math.sqrt(3)
+    size = hex_size / math.sqrt(3)
     col_spacing = 1.5 * size
-    row_spacing = HEX_SIZE_M
+    row_spacing = hex_size
 
     # Offset between sheet centers (accounting for overlap)
     # For short_edge: sheets side-by-side, share columns
@@ -857,7 +870,8 @@ def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
         rotation_deg=base_config.rotation_deg,
         count=count,
         orientation=orientation,
-        overlap_hexes=overlap_hexes
+        overlap_hexes=overlap_hexes,
+        hex_size_m=base_config.hex_size_m
     )
 
     print(f"\nSheet centers:")
@@ -876,6 +890,9 @@ def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
             region=base_config.region,
             country=base_config.country,
             rotation_deg=base_config.rotation_deg,
+            hex_size_m=base_config.hex_size_m,
+            contour_interval=base_config.contour_interval,
+            index_contour_interval=base_config.index_contour_interval,
         )
         min_elev = scan_sheet_elevation(scan_config)
         if min_elev is not None:
@@ -894,7 +911,7 @@ def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
 
     # Generate each sheet
     generated_sheets = []
-    width_m, height_m = calculate_map_dimensions()
+    width_m, height_m = calculate_map_dimensions(base_config.hex_size_m)
 
     for i, (sheet_name, sheet_lat, sheet_lon) in enumerate(sheet_centers):
         print(f"\n{'='*60}")
@@ -917,6 +934,9 @@ def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
             rotation_deg=base_config.rotation_deg,
             timestamp=base_config.timestamp,  # Use same timestamp for cluster
             elevation_band_interval=base_config.elevation_band_interval,
+            hex_size_m=base_config.hex_size_m,
+            contour_interval=base_config.contour_interval,
+            index_contour_interval=base_config.index_contour_interval,
         )
 
         # Generate this sheet with cluster-wide elevation base and shared edge info
@@ -935,16 +955,19 @@ def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
                 'output_file': str(output_path.name) if output_path else None,
             })
 
-    # Calculate total coverage
+    # Calculate total coverage using config's hex size
+    hex_size = base_config.hex_size_m
+    col_spacing = 1.5 * hex_size / math.sqrt(3)
+    row_spacing = hex_size
     if orientation == 'short_edge':
-        total_width_m = width_m * 2 - (overlap_hexes * 1.5 * HEX_SIZE_M / math.sqrt(3))
+        total_width_m = width_m * 2 - (overlap_hexes * col_spacing)
         total_height_m = height_m
     elif orientation == 'long_edge':
         total_width_m = width_m
-        total_height_m = height_m * 2 - (overlap_hexes * HEX_SIZE_M)
+        total_height_m = height_m * 2 - (overlap_hexes * row_spacing)
     elif orientation == 'grid':
-        total_width_m = width_m * 2 - (overlap_hexes * 1.5 * HEX_SIZE_M / math.sqrt(3))
-        total_height_m = height_m * 2 - (overlap_hexes * HEX_SIZE_M)
+        total_width_m = width_m * 2 - (overlap_hexes * col_spacing)
+        total_height_m = height_m * 2 - (overlap_hexes * row_spacing)
     else:
         total_width_m = width_m
         total_height_m = height_m
@@ -1029,7 +1052,7 @@ def generate_single_sheet(
         actual_output.mkdir(parents=True, exist_ok=True)
 
     print(f"Center: {config.center_lat:.4f}°N, {config.center_lon:.4f}°E")
-    print(f"Grid: {GRID_WIDTH} x {GRID_HEIGHT} hexes @ {HEX_SIZE_M}m")
+    print(f"Grid: {GRID_WIDTH} x {GRID_HEIGHT} hexes @ {config.hex_size_m}m")
 
     # Check if data exists, try to extract if not
     dem_path = config.data_path / "elevation.tif"
@@ -1174,7 +1197,7 @@ def generate_single_sheet(
             "name": config.name,
             "center_lat": config.center_lat,
             "center_lon": config.center_lon,
-            "hex_size_m": HEX_SIZE_M,
+            "hex_size_m": config.hex_size_m,
             "grid_width": GRID_WIDTH,
             "grid_height": GRID_HEIGHT,
             "timestamp": config.timestamp,
@@ -1258,10 +1281,10 @@ class TacticalHexGrid:
 
     def __init__(self, config: MapConfig):
         self.config = config
-        self.hex_size = HEX_SIZE_M
-        self.size = HEX_SIZE_M / math.sqrt(3)  # center to vertex
+        self.hex_size = config.hex_size_m
+        self.size = config.hex_size_m / math.sqrt(3)  # center to vertex
         self.col_spacing = 1.5 * self.size
-        self.row_spacing = HEX_SIZE_M
+        self.row_spacing = config.hex_size_m
 
         # Origin at top-left of grid
         self.origin_x = config.min_x + self.size
@@ -1352,12 +1375,44 @@ def load_dem(config: MapConfig) -> rasterio.DatasetReader:
             ds.close()
 
 
+def _find_geodata_file(directory: Path, filename: str) -> Optional[Path]:
+    """Find the best available geodata file, preferring GeoPackage over GeoJSON.
+
+    Args:
+        directory: Directory to search in
+        filename: Base filename (e.g., "roads.geojson")
+
+    Returns:
+        Path to the best available file, or None if not found
+    """
+    # Get base name without extension
+    base_name = filename.rsplit('.', 1)[0]
+
+    # Prefer GeoPackage (faster loading with spatial index)
+    gpkg_path = directory / f"{base_name}.gpkg"
+    if gpkg_path.exists():
+        return gpkg_path
+
+    # Fall back to GeoJSON
+    geojson_path = directory / filename
+    if geojson_path.exists():
+        return geojson_path
+
+    return None
+
+
 def load_geojson_from_all_squares(
     config: MapConfig,
     filename: str,
     alternate_filename: str = None
 ) -> gpd.GeoDataFrame:
-    """Load and merge a GeoJSON file from all MGRS squares covering the data bounds.
+    """Load and merge geodata from all MGRS squares covering the data bounds.
+
+    Prefers GeoPackage (.gpkg) format when available for faster loading,
+    falls back to GeoJSON (.geojson) if not.
+
+    For GeoPackage files, uses bbox filtering to only load features within
+    the map bounds, leveraging the spatial index for significant speedup.
 
     Args:
         config: MapConfig object
@@ -1372,22 +1427,29 @@ def load_geojson_from_all_squares(
     data_paths = get_all_data_paths(config)
     gdfs = []
 
+    # Calculate bbox in WGS84 for spatial filtering (source files are in WGS84)
+    transformer_to_wgs84 = Transformer.from_crs(GRID_CRS, WGS84, always_xy=True)
+    min_lon, min_lat = transformer_to_wgs84.transform(config.data_min_x, config.data_min_y)
+    max_lon, max_lat = transformer_to_wgs84.transform(config.data_max_x, config.data_max_y)
+    # Add buffer for edge features
+    bbox = (min_lon - 0.01, min_lat - 0.01, max_lon + 0.01, max_lat + 0.01)
+
     for path in data_paths:
         # Try alternate filename first if provided
         file_path = None
         if alternate_filename:
-            alt_path = path / alternate_filename
-            if alt_path.exists():
-                file_path = alt_path
+            file_path = _find_geodata_file(path, alternate_filename)
 
         if file_path is None:
-            primary_path = path / filename
-            if primary_path.exists():
-                file_path = primary_path
+            file_path = _find_geodata_file(path, filename)
 
         if file_path:
             try:
-                gdf = gpd.read_file(file_path, on_invalid="ignore")
+                # Use bbox filtering for GeoPackage files (much faster with spatial index)
+                if file_path.suffix == '.gpkg':
+                    gdf = gpd.read_file(file_path, bbox=bbox, on_invalid="ignore")
+                else:
+                    gdf = gpd.read_file(file_path, on_invalid="ignore")
                 if not gdf.empty:
                     gdfs.append(gdf)
             except Exception as e:
@@ -1407,18 +1469,20 @@ def load_geojson_from_all_squares(
 def generate_contours(
     dem: rasterio.DatasetReader,
     config: MapConfig,
-    interval: float = CONTOUR_INTERVAL,
 ) -> List[dict]:
     """
     Generate contour lines from DEM within map bounds.
     Uses expanded bounds for rotation.
+    Uses config.contour_interval and config.index_contour_interval.
 
     Returns list of {geometry: LineString, elevation: float, is_index: bool}
     """
     from rasterio.windows import from_bounds
     from skimage import measure
 
-    print("Generating contours...")
+    interval = config.contour_interval
+    index_interval = config.index_contour_interval
+    print(f"Generating contours ({interval}m/{index_interval}m)...")
 
     # Get window for our data bounds (in DEM's CRS, which is WGS84)
     # Uses expanded bounds to account for rotation
@@ -1470,7 +1534,7 @@ def generate_contours(
         except:
             continue
 
-        is_index = (level % INDEX_CONTOUR_INTERVAL) == 0
+        is_index = (level % index_interval) == 0
 
         for line in contour_lines:
             if len(line) < 2:
@@ -2330,6 +2394,8 @@ def load_reference_tile_info(config: MapConfig) -> dict:
 def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15, output_dir: Path = None) -> dict:
     """Download high-resolution reference tiles for the specific map area.
 
+    Tiles are cached in DATA_DIR/tile_cache/ for reuse across map generations.
+
     Args:
         config: MapConfig with calculated bounds
         zoom: Tile zoom level (15 = ~4.7m/pixel, max for OpenTopoMap outside Europe)
@@ -2339,6 +2405,7 @@ def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15, output
         Tile info dict with embedded base64 image, or None if download fails
     """
     import base64
+    import shutil
     import time
     from io import BytesIO
 
@@ -2353,6 +2420,9 @@ def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15, output
     actual_output = output_dir if output_dir else config.output_path
     actual_output.mkdir(parents=True, exist_ok=True)
 
+    # Create cache directory
+    TILE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
     output_image = actual_output / f"{config.name}_reference_highres.png"
     output_info = actual_output / f"{config.name}_reference_highres.json"
 
@@ -2361,13 +2431,50 @@ def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15, output
     needed_min_lon, needed_min_lat = transformer.transform(config.data_min_x, config.data_min_y)
     needed_max_lon, needed_max_lat = transformer.transform(config.data_max_x, config.data_max_y)
 
-    # Check if already downloaded AND covers the needed area
+    tolerance = 0.001  # ~100m for bounds checking
+
+    def check_cached_tiles(cache_dir: Path) -> dict:
+        """Check if any cached tiles cover the needed bounds."""
+        if not cache_dir.exists():
+            return None
+        for info_file in cache_dir.glob("tiles_*.json"):
+            try:
+                with open(info_file) as f:
+                    tile_info = json.load(f)
+                stored = tile_info.get('bounds', {})
+                bounds_ok = (
+                    stored.get('north', 0) >= needed_max_lat - tolerance and
+                    stored.get('south', 0) <= needed_min_lat + tolerance and
+                    stored.get('east', 0) >= needed_max_lon - tolerance and
+                    stored.get('west', 0) <= needed_min_lon + tolerance
+                )
+                if bounds_ok:
+                    image_file = info_file.with_suffix('.png')
+                    if image_file.exists():
+                        return {'info': tile_info, 'info_file': info_file, 'image_file': image_file}
+            except (json.JSONDecodeError, KeyError):
+                continue
+        return None
+
+    # Check global tile cache first
+    cached = check_cached_tiles(TILE_CACHE_DIR)
+    if cached:
+        print(f"  Loading cached high-res reference tiles...")
+        with open(cached['image_file'], 'rb') as f:
+            image_data = base64.b64encode(f.read()).decode('utf-8')
+        tile_info = cached['info']
+        tile_info['image_data'] = image_data
+        print(f"    Loaded {tile_info['width']}x{tile_info['height']} cached tile image (zoom {tile_info['zoom']})")
+        # Copy to output directory for this map
+        shutil.copy(cached['image_file'], output_image)
+        shutil.copy(cached['info_file'], output_info)
+        return tile_info
+
+    # Check output directory (legacy location)
     if output_image.exists() and output_info.exists():
         with open(output_info) as f:
             tile_info = json.load(f)
 
-        # Check if stored bounds cover the needed area (with small tolerance)
-        tolerance = 0.001  # ~100m
         stored = tile_info.get('bounds', {})
         bounds_ok = (
             stored.get('north', 0) >= needed_max_lat - tolerance and
@@ -2471,9 +2578,6 @@ def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15, output
         py = (y - y_min) * tile_size
         stitched.paste(tile, (px, py))
 
-    # Save image
-    stitched.save(output_image, quality=95)
-
     # Calculate bounds of the stitched tiles
     nw_lat, nw_lon = tile_to_lat_lon(x_min, y_min, zoom)
     se_lat, se_lon = tile_to_lat_lon(x_max + 1, y_max + 1, zoom)
@@ -2491,9 +2595,20 @@ def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15, output
         "source": "OpenTopoMap"
     }
 
-    # Save info
-    with open(output_info, 'w') as f:
+    # Generate cache filename from tile coordinates
+    cache_name = f"tiles_z{zoom}_{x_min}_{y_min}_{x_max}_{y_max}"
+    cache_image = TILE_CACHE_DIR / f"{cache_name}.png"
+    cache_info = TILE_CACHE_DIR / f"{cache_name}.json"
+
+    # Save to cache directory
+    stitched.save(cache_image, quality=95)
+    with open(cache_info, 'w') as f:
         json.dump(tile_info, f, indent=2)
+    print(f"    Cached {width}x{height} tile image to {TILE_CACHE_DIR.name}/")
+
+    # Copy to output directory
+    shutil.copy(cache_image, output_image)
+    shutil.copy(cache_info, output_info)
 
     # Encode for embedding
     with open(output_image, 'rb') as f:
@@ -2574,9 +2689,27 @@ def render_tactical_svg(
         shared_edges = []
     print("\nRendering SVG...")
 
+    # === Scale visual elements based on hex size ===
+    # Reference size is 250m - scale proportionally for other hex sizes
+    hex_scale = config.hex_size_m / 250.0
+
+    # Scaled visual constants (these were designed for 250m hexes)
+    hex_grid_width_scaled = HEX_GRID_WIDTH_M * hex_scale
+    hex_halo_width_scaled = HEX_HALO_WIDTH_M * hex_scale
+    hex_marker_radius_scaled = HEX_MARKER_RADIUS_M * hex_scale
+    hex_label_size_scaled = HEX_LABEL_SIZE_M * hex_scale
+    contour_label_size_scaled = CONTOUR_LABEL_SIZE_M * hex_scale
+    contour_width_scaled = CONTOUR_WIDTH_M * hex_scale
+    index_contour_width_scaled = INDEX_CONTOUR_WIDTH_M * hex_scale
+    mgrs_label_size_scaled = MGRS_LABEL_SIZE_M * hex_scale
+    mgrs_grid_width_scaled = MGRS_GRID_WIDTH_M * hex_scale
+    data_font_size_scaled = DATA_FONT_SIZE_M * hex_scale
+    data_line_height_scaled = DATA_LINE_HEIGHT_M * hex_scale
+    place_label_size_scaled = PLACE_LABEL_SIZE_M * hex_scale
+
     # === NEW LAYOUT: Fixed 34" x 22" trim with data elements outside bleed ===
 
-    # Hex grid dimensions in meters (at current HEX_SIZE_M)
+    # Hex grid dimensions in meters (at config.hex_size_m)
     # config.min/max already define the VISUAL bounds (including vertices)
     # calculated in calculate_bounds() as: width_m = (GRID_WIDTH-1)*col_spacing + 2*size
     # So we don't need additional vertex extensions - they're already included.
@@ -2883,7 +3016,7 @@ def render_tactical_svg(
         dwg=dwg,
         to_svg=to_svg,
         svg_to_world=svg_to_world,
-        hex_size_m=HEX_SIZE_M,
+        hex_size_m=config.hex_size_m,
         terrain_style='temperate',
         intensity=1.0,
         rotation_deg=config.rotation_deg,
@@ -3391,7 +3524,7 @@ def render_tactical_svg(
 
                 # Scale font size by place importance
                 size_scale = {'city': 1.5, 'town': 1.2, 'village': 1.0, 'hamlet': 0.8}.get(place_type, 0.8)
-                font_size = PLACE_LABEL_SIZE_M * size_scale
+                font_size = place_label_size_scaled * size_scale
 
                 layer_places.add(dwg.text(
                     name,
@@ -3602,7 +3735,7 @@ def render_tactical_svg(
             target_layer.add(dwg.polyline(
                 points=svg_points,
                 stroke=INDEX_CONTOUR_COLOR if is_index else CONTOUR_COLOR,
-                stroke_width=INDEX_CONTOUR_WIDTH_M if is_index else CONTOUR_WIDTH_M,
+                stroke_width=index_contour_width_scaled if is_index else contour_width_scaled,
                 stroke_opacity=CONTOUR_OPACITY,
                 fill="none",
             ))
@@ -3645,7 +3778,7 @@ def render_tactical_svg(
                         elev_text,
                         insert=(sx, sy),
                         text_anchor="middle",
-                        font_size=CONTOUR_LABEL_SIZE_M,
+                        font_size=contour_label_size_scaled,
                         fill=INDEX_CONTOUR_COLOR,
                         fill_opacity=CONTOUR_OPACITY,
                         font_family="sans-serif",
@@ -3844,7 +3977,7 @@ def render_tactical_svg(
                 start=(svg_vx, svg_vy),
                 end=(svg_sx, svg_sy),
                 stroke=HEX_HALO_COLOR,
-                stroke_width=HEX_HALO_WIDTH_M,
+                stroke_width=hex_halo_width_scaled,
                 stroke_opacity=HEX_HALO_OPACITY,
                 stroke_linecap="round",
             ))
@@ -3862,7 +3995,7 @@ def render_tactical_svg(
                 start=(svg_vx, svg_vy),
                 end=(svg_sx, svg_sy),
                 stroke=HEX_GRID_COLOR,
-                stroke_width=HEX_GRID_WIDTH_M,
+                stroke_width=hex_grid_width_scaled,
                 stroke_opacity=HEX_GRID_OPACITY,
                 stroke_linecap="round",
             ))
@@ -3879,27 +4012,27 @@ def render_tactical_svg(
         # Marker halo (wider white circle)
         layer_hex_markers.add(dwg.circle(
             center=(center_svg_x, center_svg_y),
-            r=HEX_MARKER_RADIUS_M,
+            r=hex_marker_radius_scaled,
             fill="none",
             stroke=HEX_HALO_COLOR,
-            stroke_width=HEX_HALO_WIDTH_M,
+            stroke_width=hex_halo_width_scaled,
             stroke_opacity=HEX_HALO_OPACITY,
         ))
 
         # Label halo (white stroke behind text)
         top_offset = grid.size * math.sqrt(3) / 2 * 0.80
         svg_x, svg_y = to_svg(cx, cy + top_offset)
-        svg_y += HEX_LABEL_SIZE_M * 0.35
+        svg_y += hex_label_size_scaled * 0.35
         label = f"{h.q + 1:02d}.{h.r + 1:02d}"
 
         layer_hex_labels.add(dwg.text(
             label,
             insert=(svg_x, svg_y),
             text_anchor="middle",
-            font_size=HEX_LABEL_SIZE_M,
+            font_size=hex_label_size_scaled,
             fill="none",
             stroke=HEX_HALO_COLOR,
-            stroke_width=HEX_HALO_WIDTH_M * 0.5,  # Thinner halo for text
+            stroke_width=hex_halo_width_scaled * 0.5,  # Thinner halo for text
             stroke_opacity=HEX_HALO_OPACITY,
             font_family="sans-serif",
         ))
@@ -3912,10 +4045,10 @@ def render_tactical_svg(
         center_svg_x, center_svg_y = to_svg(cx, cy)
         layer_hex_markers.add(dwg.circle(
             center=(center_svg_x, center_svg_y),
-            r=HEX_MARKER_RADIUS_M,
+            r=hex_marker_radius_scaled,
             fill="none",
             stroke=HEX_GRID_COLOR,
-            stroke_width=HEX_GRID_WIDTH_M,
+            stroke_width=hex_grid_width_scaled,
             stroke_opacity=HEX_GRID_OPACITY,
         ))
 
@@ -3924,7 +4057,7 @@ def render_tactical_svg(
         svg_x, svg_y = to_svg(cx, cy + top_offset)
 
         # Adjust y down slightly for text baseline (in meters)
-        svg_y += HEX_LABEL_SIZE_M * 0.35
+        svg_y += hex_label_size_scaled * 0.35
 
         # Generate label: XX.YY (1-indexed)
         label = f"{h.q + 1:02d}.{h.r + 1:02d}"
@@ -3933,7 +4066,7 @@ def render_tactical_svg(
             label,
             insert=(svg_x, svg_y),
             text_anchor="middle",
-            font_size=HEX_LABEL_SIZE_M,
+            font_size=hex_label_size_scaled,
             fill=HEX_GRID_COLOR,
             font_family="sans-serif",
             opacity=HEX_GRID_OPACITY,
@@ -4020,7 +4153,7 @@ def render_tactical_svg(
                     layer_mgrs_grid.add(dwg.polyline(
                         points=list(cline.coords),
                         stroke=MGRS_GRID_COLOR,
-                        stroke_width=MGRS_GRID_WIDTH_M,
+                        stroke_width=mgrs_grid_width_scaled,
                         fill="none",
                     ))
 
@@ -4064,7 +4197,7 @@ def render_tactical_svg(
                     layer_mgrs_grid.add(dwg.polyline(
                         points=list(cline.coords),
                         stroke=MGRS_GRID_COLOR,
-                        stroke_width=MGRS_GRID_WIDTH_M,
+                        stroke_width=mgrs_grid_width_scaled,
                         fill="none",
                     ))
 
@@ -4116,9 +4249,9 @@ def render_tactical_svg(
                         if hex_boundary_poly.contains(Point(rot_x, rot_y)):
                             text_elem = dwg.text(
                                 line_info['label'],
-                                insert=(rot_x, rot_y + MGRS_LABEL_SIZE_M * 0.35),
+                                insert=(rot_x, rot_y + mgrs_label_size_scaled * 0.35),
                                 text_anchor="middle",
-                                font_size=MGRS_LABEL_SIZE_M,
+                                font_size=mgrs_label_size_scaled,
                                 fill=label_color,
                                 font_family="sans-serif",
                             )
@@ -4146,9 +4279,9 @@ def render_tactical_svg(
                         if hex_boundary_poly.contains(Point(rot_x, rot_y)):
                             text_elem = dwg.text(
                                 line_info['label'],
-                                insert=(rot_x, rot_y + MGRS_LABEL_SIZE_M * 0.35),
+                                insert=(rot_x, rot_y + mgrs_label_size_scaled * 0.35),
                                 text_anchor="middle",
-                                font_size=MGRS_LABEL_SIZE_M,
+                                font_size=mgrs_label_size_scaled,
                                 fill=label_color,
                                 font_family="sans-serif",
                             )
@@ -4240,7 +4373,7 @@ def render_tactical_svg(
 
     # Data block positioning - in the data margin area (outside bleed, for SVG reference only)
     # This area will NOT be printed - it's for artist reference in the SVG
-    data_block_y = DATA_FONT_SIZE_M + 20  # Start near top of data margin area
+    data_block_y = data_font_size_scaled + 20  # Start near top of data margin area
 
     # Calculate elevation range from hexes for display
     hex_elevations = [h.elevation_avg for h in hexes]
@@ -4248,7 +4381,7 @@ def render_tactical_svg(
     max_elevation = max(hex_elevations) if hex_elevations else 0
 
     # Six columns across the top data margin area
-    col1_x = DATA_FONT_SIZE_M                      # MAP CENTER
+    col1_x = data_font_size_scaled                      # MAP CENTER
     col2_x = viewbox_width_with_bleed * 0.15       # GRID INFO
     col3_x = viewbox_width_with_bleed * 0.28       # MAP SETTINGS
     col4_x = viewbox_width_with_bleed * 0.42       # PRINT LAYOUT
@@ -4259,7 +4392,7 @@ def render_tactical_svg(
     layer_map_data.add(dwg.text(
         "MAP CENTER",
         insert=(col1_x, data_block_y),
-        font_size=DATA_FONT_SIZE_M * 1.1,
+        font_size=data_font_size_scaled * 1.1,
         font_weight="bold",
         fill="#cccccc",
         font_family="monospace",
@@ -4268,8 +4401,8 @@ def render_tactical_svg(
     map_title = f"{config.country}: {config.name}" if config.country else config.name
     layer_map_data.add(dwg.text(
         map_title,
-        insert=(col1_x, data_block_y + DATA_LINE_HEIGHT_M),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col1_x, data_block_y + data_line_height_scaled),
+        font_size=data_font_size_scaled,
         font_weight="bold",
         fill="#00d4ff",
         font_family="monospace",
@@ -4277,24 +4410,24 @@ def render_tactical_svg(
 
     layer_map_data.add(dwg.text(
         f"MGRS: {mgrs_formatted}",
-        insert=(col1_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col1_x, data_block_y + data_line_height_scaled * 2),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
         f"LAT: {config.center_lat:.5f}",
-        insert=(col1_x, data_block_y + DATA_LINE_HEIGHT_M * 3),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col1_x, data_block_y + data_line_height_scaled * 3),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
         f"LNG: {config.center_lon:.5f}",
-        insert=(col1_x, data_block_y + DATA_LINE_HEIGHT_M * 4),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col1_x, data_block_y + data_line_height_scaled * 4),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
@@ -4303,24 +4436,24 @@ def render_tactical_svg(
     layer_map_data.add(dwg.text(
         "GRID INFO",
         insert=(col2_x, data_block_y),
-        font_size=DATA_FONT_SIZE_M * 1.1,
+        font_size=data_font_size_scaled * 1.1,
         font_weight="bold",
         fill="#cccccc",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
-        f"{GRID_WIDTH}x{GRID_HEIGHT} @ {HEX_SIZE_M}m",
-        insert=(col2_x, data_block_y + DATA_LINE_HEIGHT_M),
-        font_size=DATA_FONT_SIZE_M,
+        f"{GRID_WIDTH}x{GRID_HEIGHT} @ {config.hex_size_m}m",
+        insert=(col2_x, data_block_y + data_line_height_scaled),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
         f"{(config.max_x - config.min_x)/1000:.1f}x{(config.max_y - config.min_y)/1000:.1f}km",
-        insert=(col2_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col2_x, data_block_y + data_line_height_scaled * 2),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
@@ -4331,8 +4464,8 @@ def render_tactical_svg(
             bearing_at_top += 360
         layer_map_data.add(dwg.text(
             f"Bearing: {bearing_at_top:.0f}°",
-            insert=(col2_x, data_block_y + DATA_LINE_HEIGHT_M * 3),
-            font_size=DATA_FONT_SIZE_M,
+            insert=(col2_x, data_block_y + data_line_height_scaled * 3),
+            font_size=data_font_size_scaled,
             fill="#ffcc00",
             font_family="monospace",
         ))
@@ -4341,24 +4474,34 @@ def render_tactical_svg(
     layer_map_data.add(dwg.text(
         "MAP SETTINGS",
         insert=(col3_x, data_block_y),
-        font_size=DATA_FONT_SIZE_M * 1.1,
+        font_size=data_font_size_scaled * 1.1,
         font_weight="bold",
         fill="#cccccc",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
-        f"Contours: {CONTOUR_INTERVAL}m/{INDEX_CONTOUR_INTERVAL}m",
-        insert=(col3_x, data_block_y + DATA_LINE_HEIGHT_M),
-        font_size=DATA_FONT_SIZE_M,
+        f"Contours: {int(config.contour_interval)}m/{int(config.index_contour_interval)}m",
+        insert=(col3_x, data_block_y + data_line_height_scaled),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
         f"MGRS Grid: {MGRS_GRID_INTERVAL}m",
-        insert=(col3_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col3_x, data_block_y + data_line_height_scaled * 2),
+        font_size=data_font_size_scaled,
+        fill="#aaaaaa",
+        font_family="monospace",
+    ))
+
+    # Show elevation band setting (actual_band_interval is the computed value)
+    band_setting_str = f"{actual_band_interval}m" if actual_band_interval else "auto"
+    layer_map_data.add(dwg.text(
+        f"Elev Bands: {band_setting_str}",
+        insert=(col3_x, data_block_y + data_line_height_scaled * 3),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
@@ -4367,7 +4510,7 @@ def render_tactical_svg(
     layer_map_data.add(dwg.text(
         "PRINT LAYOUT",
         insert=(col4_x, data_block_y),
-        font_size=DATA_FONT_SIZE_M * 1.1,
+        font_size=data_font_size_scaled * 1.1,
         font_weight="bold",
         fill="#cccccc",
         font_family="monospace",
@@ -4375,24 +4518,24 @@ def render_tactical_svg(
 
     layer_map_data.add(dwg.text(
         f"Trim: {TRIM_WIDTH_IN}\"x{TRIM_HEIGHT_IN}\"",
-        insert=(col4_x, data_block_y + DATA_LINE_HEIGHT_M),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col4_x, data_block_y + data_line_height_scaled),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
         f"Bleed: {BLEED_INCHES}\"",
-        insert=(col4_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col4_x, data_block_y + data_line_height_scaled * 2),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
         f"Margin: {DATA_MARGIN_IN}\"",
-        insert=(col4_x, data_block_y + DATA_LINE_HEIGHT_M * 3),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col4_x, data_block_y + data_line_height_scaled * 3),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
@@ -4406,7 +4549,7 @@ def render_tactical_svg(
     layer_map_data.add(dwg.text(
         "CORNERS (WGS84)",
         insert=(col5_x, data_block_y),
-        font_size=DATA_FONT_SIZE_M * 1.1,
+        font_size=data_font_size_scaled * 1.1,
         font_weight="bold",
         fill="#cccccc",
         font_family="monospace",
@@ -4414,32 +4557,32 @@ def render_tactical_svg(
 
     layer_map_data.add(dwg.text(
         f"NW: {nw_lat:.4f}, {nw_lon:.4f}",
-        insert=(col5_x, data_block_y + DATA_LINE_HEIGHT_M),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col5_x, data_block_y + data_line_height_scaled),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
         f"NE: {ne_lat:.4f}, {ne_lon:.4f}",
-        insert=(col5_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col5_x, data_block_y + data_line_height_scaled * 2),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
         f"SW: {sw_lat:.4f}, {sw_lon:.4f}",
-        insert=(col5_x, data_block_y + DATA_LINE_HEIGHT_M * 3),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col5_x, data_block_y + data_line_height_scaled * 3),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
 
     layer_map_data.add(dwg.text(
         f"SE: {se_lat:.4f}, {se_lon:.4f}",
-        insert=(col5_x, data_block_y + DATA_LINE_HEIGHT_M * 4),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col5_x, data_block_y + data_line_height_scaled * 4),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
@@ -4448,7 +4591,7 @@ def render_tactical_svg(
     layer_map_data.add(dwg.text(
         "ELEVATION",
         insert=(col6_x, data_block_y),
-        font_size=DATA_FONT_SIZE_M * 1.1,
+        font_size=data_font_size_scaled * 1.1,
         font_weight="bold",
         fill="#cccccc",
         font_family="monospace",
@@ -4456,8 +4599,8 @@ def render_tactical_svg(
 
     layer_map_data.add(dwg.text(
         f"Range: {min_elevation:.0f}-{max_elevation:.0f}m",
-        insert=(col6_x, data_block_y + DATA_LINE_HEIGHT_M),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col6_x, data_block_y + data_line_height_scaled),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
@@ -4465,8 +4608,8 @@ def render_tactical_svg(
     band_interval_str = f"{actual_band_interval}m" if actual_band_interval else "auto"
     layer_map_data.add(dwg.text(
         f"Band: {band_interval_str}",
-        insert=(col6_x, data_block_y + DATA_LINE_HEIGHT_M * 2),
-        font_size=DATA_FONT_SIZE_M,
+        insert=(col6_x, data_block_y + data_line_height_scaled * 2),
+        font_size=data_font_size_scaled,
         fill="#aaaaaa",
         font_family="monospace",
     ))
@@ -4476,9 +4619,9 @@ def render_tactical_svg(
     print("  Rendering compass rose...")
 
     # Position compass in top-right data margin area (outside print area)
-    compass_size = HEX_SIZE_M * 0.8  # Slightly smaller than a hex
+    compass_size = config.hex_size_m * 0.8  # Slightly smaller than a hex
     compass_cx = viewbox_width_with_bleed - data_margin_m / 2  # Center in right data margin
-    compass_cy = data_margin_m / 2 + DATA_LINE_HEIGHT_M * 2  # In top data margin area
+    compass_cy = data_margin_m / 2 + data_line_height_scaled * 2  # In top data margin area
 
     # Arrow dimensions
     arrow_length = compass_size * 0.4
@@ -4533,7 +4676,7 @@ def render_tactical_svg(
         "N",
         insert=(compass_cx, compass_cy - circle_radius - 10),
         text_anchor="middle",
-        font_size=DATA_FONT_SIZE_M * 1.2,
+        font_size=data_font_size_scaled * 1.2,
         font_weight="bold",
         fill="#cc0000",
         font_family="sans-serif",
@@ -4547,20 +4690,20 @@ def render_tactical_svg(
         bearing_at_top += 360
 
     # Small upward arrow with heading text below it, above compass
-    arrow_y = compass_cy - circle_radius - DATA_FONT_SIZE_M * 3
+    arrow_y = compass_cy - circle_radius - data_font_size_scaled * 3
     layer_compass.add(dwg.text(
         "↑",
         insert=(compass_cx, arrow_y),
         text_anchor="middle",
-        font_size=DATA_FONT_SIZE_M * 1.5,
+        font_size=data_font_size_scaled * 1.5,
         fill="#888888",
         font_family="sans-serif",
     ))
     layer_compass.add(dwg.text(
         f"Top: {bearing_at_top:.0f}°",
-        insert=(compass_cx, arrow_y + DATA_FONT_SIZE_M * 1.0),
+        insert=(compass_cx, arrow_y + data_font_size_scaled * 1.0),
         text_anchor="middle",
-        font_size=DATA_FONT_SIZE_M * 0.8,
+        font_size=data_font_size_scaled * 0.8,
         fill="#888888",
         font_family="sans-serif",
     ))
@@ -4767,7 +4910,7 @@ def render_tactical_svg(
     ))
 
     # Add labels for the guide lines
-    guide_label_size = DATA_FONT_SIZE_M * 0.7
+    guide_label_size = data_font_size_scaled * 0.7
     # Bleed label (top-left corner of bleed line)
     layer_print_guides.add(dwg.text(
         "BLEED",
@@ -4829,6 +4972,9 @@ def load_config_from_file() -> Optional[Tuple[MapConfig, Optional[dict]]]:
         country=data.get("country", ""),
         rotation_deg=data.get("rotation_deg", 0),
         elevation_band_interval=data.get("elevation_band_interval", "auto"),
+        hex_size_m=data.get("hex_size_m", HEX_SIZE_M),  # Falls back to global default
+        contour_interval=data.get("contour_interval", CONTOUR_INTERVAL),
+        index_contour_interval=data.get("index_contour_interval", INDEX_CONTOUR_INTERVAL),
     )
 
     # Extract multi_map settings if present
@@ -5277,7 +5423,7 @@ def main():
     print(f"Tactical Map Generator: {config.name}")
     print("=" * 60)
     print(f"Center: {config.center_lat:.4f}°N, {config.center_lon:.4f}°E")
-    print(f"Grid: {GRID_WIDTH} x {GRID_HEIGHT} hexes @ {HEX_SIZE_M}m")
+    print(f"Grid: {GRID_WIDTH} x {GRID_HEIGHT} hexes @ {config.hex_size_m}m")
     print(f"Map size: {(config.max_x - config.min_x)/1000:.1f}km x {(config.max_y - config.min_y)/1000:.1f}km")
     if config.rotation_deg != 0:
         print(f"Rotation: {config.rotation_deg}° clockwise")
@@ -5451,7 +5597,7 @@ def main():
             "name": config.name,
             "center_lat": config.center_lat,
             "center_lon": config.center_lon,
-            "hex_size_m": HEX_SIZE_M,
+            "hex_size_m": config.hex_size_m,
             "grid_width": GRID_WIDTH,
             "grid_height": GRID_HEIGHT,
             "timestamp": config.timestamp,

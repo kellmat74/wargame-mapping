@@ -1412,15 +1412,20 @@
         // ============================================
 
         // Map parameters (should match tactical_map.py)
-        const HEX_SIZE_M = 250;
         const GRID_WIDTH = 47;
         const GRID_HEIGHT = 26;
 
+        // Get hex size from input field (dynamic, not hardcoded)
+        function getHexSizeM() {
+            return parseFloat(document.getElementById('hexSizeM').value) || 250;
+        }
+
         function calculateMapBounds(centerLat, centerLon, rotationDeg) {
-            // Calculate map dimensions
-            const size = HEX_SIZE_M / Math.sqrt(3);
+            // Calculate map dimensions using dynamic hex size
+            const hexSizeM = getHexSizeM();
+            const size = hexSizeM / Math.sqrt(3);
             const colSpacing = 1.5 * size;
-            const rowSpacing = HEX_SIZE_M;
+            const rowSpacing = hexSizeM;
 
             const widthM = (GRID_WIDTH - 1) * colSpacing + 2 * size;
             const heightM = GRID_HEIGHT * rowSpacing;
@@ -1960,7 +1965,8 @@ config = MapConfig(
                 center_lat: state.centerLat,
                 center_lon: state.centerLon,
                 region: effectiveRegion,
-                rotation_deg: bearingToRotation(state.bearingAtTop)
+                rotation_deg: bearingToRotation(state.bearingAtTop),
+                hex_size_m: getHexSizeM()
             };
 
             // Add multi-map settings if enabled
@@ -1976,6 +1982,10 @@ config = MapConfig(
             // Add elevation band interval (read from settings input)
             const elevationInput = document.getElementById('elevationBandInterval').value.trim();
             config.elevation_band_interval = elevationInput || 'auto';
+
+            // Add contour intervals
+            config.contour_interval = parseInt(document.getElementById('contourInterval').value) || 20;
+            config.index_contour_interval = parseInt(document.getElementById('indexContourInterval').value) || 100;
 
             // Show progress container
             const progressContainer = document.getElementById('progressContainer');
@@ -2279,10 +2289,11 @@ config = MapConfig(
                 return;
             }
 
-            // Calculate single map dimensions in meters
-            const size = HEX_SIZE_M / Math.sqrt(3);
+            // Calculate single map dimensions in meters using dynamic hex size
+            const hexSizeM = getHexSizeM();
+            const size = hexSizeM / Math.sqrt(3);
             const colSpacing = 1.5 * size;
-            const rowSpacing = HEX_SIZE_M;
+            const rowSpacing = hexSizeM;
             const widthM = (GRID_WIDTH - 1) * colSpacing + 2 * size;
             const heightM = GRID_HEIGHT * rowSpacing + rowSpacing / 2;
 
@@ -2492,9 +2503,10 @@ config = MapConfig(
                 return [{ dx: 0, dy: 0 }];
             }
 
-            const size = HEX_SIZE_M / Math.sqrt(3);
+            const hexSizeM = getHexSizeM();
+            const size = hexSizeM / Math.sqrt(3);
             const colSpacing = 1.5 * size;
-            const rowSpacing = HEX_SIZE_M;
+            const rowSpacing = hexSizeM;
             const xOffset = widthM - (overlapHexes * colSpacing);
             const yOffset = heightM - (overlapHexes * rowSpacing);
 
@@ -2528,10 +2540,11 @@ config = MapConfig(
                 return [{ name: '', lat: centerLat, lon: centerLon }];
             }
 
-            // Calculate overlap offset in meters
-            const size = HEX_SIZE_M / Math.sqrt(3);
+            // Calculate overlap offset in meters using dynamic hex size
+            const hexSizeM = getHexSizeM();
+            const size = hexSizeM / Math.sqrt(3);
             const colSpacing = 1.5 * size;
-            const rowSpacing = HEX_SIZE_M;
+            const rowSpacing = hexSizeM;
 
             // Offset between sheet centers (accounting for overlap)
             const xOffset = widthM - (overlapHexes * colSpacing);
@@ -2594,6 +2607,13 @@ config = MapConfig(
             // The existing handler updates state.bearingAtTop
             // Now also update the preview
             setTimeout(updatePreviewBoundary, 0);
+        });
+
+        // Update preview when hex size changes
+        document.getElementById('hexSizeM').addEventListener('input', (e) => {
+            // Debounce to avoid too many updates while typing
+            clearTimeout(window.hexSizeDebounce);
+            window.hexSizeDebounce = setTimeout(updatePreviewBoundary, 300);
         });
     </script>
 </body>

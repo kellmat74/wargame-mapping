@@ -1,45 +1,29 @@
 {
-  "_comment": "Shared configuration for tactical map generator. Edit via web UI at http://localhost:8080",
-
   "grid": {
     "hex_size_m": 250,
     "grid_width": 47,
-    "grid_height": 26,
-    "_hex_size_help": "Size of each hex in meters (flat edge to flat edge)",
-    "_grid_help": "Number of hexes wide and tall"
+    "grid_height": 26
   },
-
   "contours": {
     "contour_interval_m": 20,
-    "index_contour_interval_m": 100,
-    "_help": "Regular contours every N meters, bold index contours every M meters"
+    "index_contour_interval_m": 100
   },
-
   "print": {
-    "trim_width_in": 34.0,
-    "trim_height_in": 22.0,
+    "trim_width_in": 34,
+    "trim_height_in": 22,
     "bleed_in": 0.125,
-    "data_margin_in": 1.25,
-    "_trim_help": "Final printed dimensions in inches",
-    "_bleed_help": "Bleed area for professional printing (typically 0.125 = 1/8 inch)",
-    "_data_margin_help": "Margin outside bleed for title, legend, scale bar"
+    "data_margin_in": 1.25
   },
-
   "play_margins": {
-    "top_in": 0.0,
-    "bottom_in": 0.0,
-    "left_in": 0.0,
-    "right_in": 0.0,
-    "_help": "Margins from trim edge to hex grid (allows space for title bars etc.)"
+    "top_in": 0,
+    "bottom_in": 0,
+    "left_in": 0,
+    "right_in": 0
   },
-
   "mgrs": {
-    "grid_interval_m": 1000,
-    "_help": "MGRS grid line interval in meters (1000 = 1km grid)"
+    "grid_interval_m": 1000
   },
-
   "elevation": {
-    "band_interval": "auto",
-    "_help": "Elevation band interval in meters. Use 'auto' for automatic calculation (~4 bands), or a number (e.g., 50, 100, 150, 200)"
+    "band_interval": "auto"
   }
 }
