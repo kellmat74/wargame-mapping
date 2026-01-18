@@ -543,7 +543,14 @@ def convert_game_map():
                     convert_config = {
                         'terrain_style': config.get('terrain_style', 'auto'),
                         'elevation_intensity': config.get('elevation_intensity', 1.0),
+                        'hillside_intensity': config.get('hillside_intensity', 1.0),
+                        'hillside_color': config.get('hillside_color'),
+                        'frame_color': config.get('frame_color', '#6B2D2D'),
+                        'terrain_colors': config.get('terrain_colors'),
+                        'elevation_band_opacities': config.get('elevation_band_opacities'),
                         'label_rows': config.get('label_rows', [1, 5, 10, 15, 20, 25]),
+                        'label_color': config.get('label_color', '#5e5959'),
+                        'label_opacity': config.get('label_opacity', 0.7),
                     }
                     convert_to_game_map(Path(map_path), convert_config)
 
@@ -831,6 +838,25 @@ def shutdown():
     return jsonify({'success': True, 'message': 'Server shutting down...'})
 
 
+@app.route('/api/restart', methods=['POST'])
+def restart_server():
+    """Restart the server to pick up code changes."""
+    def do_restart():
+        import time
+        time.sleep(0.5)  # Give time for response to be sent
+        # Spawn new server process (with --no-browser to avoid opening new tab)
+        subprocess.Popen(
+            [sys.executable, __file__, '--no-browser'],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            start_new_session=True
+        )
+        time.sleep(0.3)  # Give new server time to start
+        os._exit(0)  # Exit current process
+
+    threading.Thread(target=do_restart, daemon=True).start()
+    return jsonify({'success': True, 'message': 'Server restarting...'})
+
+
 if __name__ == '__main__':
     PORT = 8080  # Using 8080 to avoid conflict with AirPlay on macOS
 
@@ -843,8 +869,9 @@ if __name__ == '__main__':
     print("Press Ctrl+C to stop the server")
     print("=" * 50)
 
-    # Open browser automatically (optional)
-    import webbrowser
-    webbrowser.open(f'http://localhost:{PORT}')
+    # Open browser automatically (optional - skip if restarting)
+    if '--no-browser' not in sys.argv:
+        import webbrowser
+        webbrowser.open(f'http://localhost:{PORT}')
 
     app.run(debug=False, port=PORT, threaded=True)

@@ -50,7 +50,7 @@ TILE_CACHE_DIR = DATA_DIR / "tile_cache"  # Cache for reference tiles
 DEFAULTS_FILE = Path("map_defaults.json")
 
 # === Version ===
-VERSION = "v2.1.5"
+VERSION = "v2.1.6"
 
 
 def load_map_defaults() -> dict:
@@ -1890,12 +1890,14 @@ def generate_game_overlays(
             svg_vx, svg_vy = to_svg(world_vx, world_vy)
             points.append((svg_vx, svg_vy))
 
-        layer_elevation.add(dwg.polygon(
+        polygon = dwg.polygon(
             points=points,
             fill='#000000',
             fill_opacity=opacity,
             stroke='none',
-        ))
+        )
+        polygon.attribs['data-band'] = str(band)  # Store band for custom opacity adjustments
+        layer_elevation.add(polygon)
         overlay_count += 1
 
     print(f"    Created {overlay_count} elevation overlay polygons (includes edge extensions)")
@@ -2791,10 +2793,12 @@ def render_tactical_svg(
     print(f"    (includes {DATA_MARGIN_IN}\" data margin + {BLEED_INCHES}\" bleed on each side)")
 
     # Create SVG with exact dimensions (data margin + bleed + trim + bleed + data margin)
+    # debug=False disables validation, allowing custom data-* attributes
     dwg = svgwrite.Drawing(
         str(output_path),
         size=(f"{doc_width_in}in", f"{doc_height_in}in"),
         viewBox=f"0 0 {viewbox_width_with_bleed} {viewbox_height_with_bleed}",
+        debug=False,
     )
     # No aspect ratio adjustment needed - dimensions match exactly
     dwg["preserveAspectRatio"] = "none"

@@ -3,14 +3,14 @@ Tests for game_map_converter module.
 
 Run with: pytest tests/test_game_map_converter.py -v
 
-These tests are designed to catch:
+These tests cover:
 1. Rotation detection from SVG structure (for logging/diagnostics)
-2. Proper overlay placement (ALWAYS outside Rotated_Content, before Hex_Grid)
-3. Screen-space coordinate usage (no transformation needed)
+2. Coordinate transformation utilities (reverse_rotate_point)
+3. Hex polygon generation
 
-Key principle: The game map converter does NO rotation.
-All rotation is handled by the detail map generator (tactical_map.py).
-Overlays use screen-space coordinates from Hex_Markers directly.
+Key principle: The game map converter does NOT generate overlays.
+All overlays are pre-generated during detail map creation (tactical_map.py)
+and the converter just unhides and optionally customizes them.
 """
 
 import math
@@ -24,7 +24,6 @@ sys.path.insert(0, '.')
 from game_map_converter import (
     get_rotation_info,
     reverse_rotate_point,
-    add_game_layers,
     create_hex_polygon_points,
 )
 
@@ -79,13 +78,6 @@ def create_minimal_svg(with_rotation: bool = False, rotation_angle: float = -30)
 
     svg_xml = svg_content.format(rotated_content=rotated_content)
     return ET.ElementTree(ET.fromstring(svg_xml))
-
-
-def create_overlay_element(element_id: str) -> ET.Element:
-    """Create a minimal overlay element for testing."""
-    elem = ET.Element('g', {'id': element_id})
-    ET.SubElement(elem, 'polygon', {'points': '0,0 10,0 10,10 0,10'})
-    return elem
 
 
 # === Tests for get_rotation_info ===
@@ -207,128 +199,6 @@ class TestReverseRotatePoint:
         assert ry == pytest.approx(original_y)
 
 
-# === Tests for add_game_layers ===
-
-class TestAddGameLayers:
-    """Tests for add_game_layers function - overlay placement.
-
-    Key principle:
-    - For ROTATED maps (is_rotated=True): Overlays go INSIDE Rotated_Content
-      so they rotate with the terrain and align visually.
-    - For NON-ROTATED maps (is_rotated=False): Overlays go before Hex_Grid
-      as siblings in Master_Content.
-    - Hex labels ALWAYS go at the end (outside rotation) to remain readable.
-    """
-
-    def test_rotated_map_overlays_inside_rotated_content(self):
-        """Test that overlays are placed INSIDE Rotated_Content for rotated maps."""
-        tree = create_minimal_svg(with_rotation=True, rotation_angle=-30)
-
-        elevation = create_overlay_element('Game_Elevation_Overlay')
-        hillside = create_overlay_element('Game_Hillside_Shading')
-        labels = create_overlay_element('Game_Hex_Labels')
-
-        add_game_layers(tree, elevation, hillside, labels, is_rotated=True)
-
-        root = tree.getroot()
-
-        # Find Rotated_Content
-        rotated_content = None
-        for elem in root.iter():
-            if elem.get('id') == 'Rotated_Content':
-                rotated_content = elem
-                break
-
-        assert rotated_content is not None, "Rotated_Content should exist"
-
-        # Check that overlays ARE children of Rotated_Content
-        child_ids = [child.get('id') for child in rotated_content]
-        assert 'Game_Elevation_Overlay' in child_ids, \
-            "Elevation overlay should be inside Rotated_Content for rotated maps"
-        assert 'Game_Hillside_Shading' in child_ids, \
-            "Hillside shading should be inside Rotated_Content for rotated maps"
-
-    def test_rotated_map_labels_outside_rotated_content(self):
-        """Test that hex labels are placed OUTSIDE Rotated_Content for readability."""
-        tree = create_minimal_svg(with_rotation=True, rotation_angle=-30)
-
-        elevation = create_overlay_element('Game_Elevation_Overlay')
-        hillside = create_overlay_element('Game_Hillside_Shading')
-        labels = create_overlay_element('Game_Hex_Labels')
-
-        add_game_layers(tree, elevation, hillside, labels, is_rotated=True)
-
-        root = tree.getroot()
-
-        # Find Rotated_Content
-        rotated_content = None
-        for elem in root.iter():
-            if elem.get('id') == 'Rotated_Content':
-                rotated_content = elem
-                break
-
-        assert rotated_content is not None
-
-        # Check that labels are NOT inside Rotated_Content
-        child_ids = [child.get('id') for child in rotated_content]
-        assert 'Game_Hex_Labels' not in child_ids, \
-            "Hex labels should NOT be inside Rotated_Content (should stay readable)"
-
-    def test_non_rotated_map_overlays_before_hex_grid(self):
-        """Test that overlays are placed before Hex_Grid for non-rotated maps."""
-        tree = create_minimal_svg(with_rotation=False)
-
-        elevation = create_overlay_element('Game_Elevation_Overlay')
-        hillside = create_overlay_element('Game_Hillside_Shading')
-        labels = create_overlay_element('Game_Hex_Labels')
-
-        add_game_layers(tree, elevation, hillside, labels)
-
-        root = tree.getroot()
-
-        # Find Master_Content
-        master_content = None
-        for elem in root.iter():
-            if elem.get('id') == 'Master_Content':
-                master_content = elem
-                break
-
-        assert master_content is not None
-
-        # Get order of children
-        child_ids = [child.get('id') for child in master_content]
-
-        # Overlays should come before Hex_Grid
-        if 'Game_Elevation_Overlay' in child_ids and 'Hex_Grid' in child_ids:
-            elev_idx = child_ids.index('Game_Elevation_Overlay')
-            grid_idx = child_ids.index('Hex_Grid')
-            assert elev_idx < grid_idx, \
-                f"Elevation overlay (idx {elev_idx}) should be before Hex_Grid (idx {grid_idx})"
-
-        if 'Game_Hillside_Shading' in child_ids and 'Hex_Grid' in child_ids:
-            shade_idx = child_ids.index('Game_Hillside_Shading')
-            grid_idx = child_ids.index('Hex_Grid')
-            assert shade_idx < grid_idx, \
-                f"Hillside shading (idx {shade_idx}) should be before Hex_Grid (idx {grid_idx})"
-
-    def test_hex_labels_at_top(self):
-        """Test that hex labels are added at the top level (end of root)."""
-        tree = create_minimal_svg(with_rotation=True)
-
-        elevation = create_overlay_element('Game_Elevation_Overlay')
-        hillside = create_overlay_element('Game_Hillside_Shading')
-        labels = create_overlay_element('Game_Hex_Labels')
-
-        add_game_layers(tree, elevation, hillside, labels)
-
-        root = tree.getroot()
-
-        # Labels should be direct children of root
-        root_child_ids = [child.get('id') for child in root]
-        assert 'Game_Hex_Labels' in root_child_ids, \
-            "Hex labels should be at root level"
-
-
 # === Tests for create_hex_polygon_points ===
 
 class TestCreateHexPolygonPoints:
@@ -350,122 +220,6 @@ class TestCreateHexPolygonPoints:
             distance = math.sqrt((x - cx)**2 + (y - cy)**2)
             assert distance == pytest.approx(size), \
                 f"Vertex ({x}, {y}) should be {size} from center ({cx}, {cy})"
-
-
-# === Integration-style tests ===
-
-class TestOverlayPlacementIntegration:
-    """Integration tests verifying overlay placement for all map types.
-
-    Key principle:
-    - For rotated maps: Overlays go INSIDE Rotated_Content to align with terrain
-    - For non-rotated maps: Overlays go before Hex_Grid in Master_Content
-    - Hex labels always go at root level for readability
-    """
-
-    def test_rotated_map_overlays_rotate_with_terrain(self):
-        """
-        Test that rotated maps place overlays inside Rotated_Content.
-
-        This ensures overlays rotate with the terrain and align visually with
-        the terrain features they represent.
-        """
-        tree = create_minimal_svg(with_rotation=True, rotation_angle=-30)
-
-        # Rotation is detected and affects placement
-        rotation_info = get_rotation_info(tree)
-        assert rotation_info is not None, "Should detect rotation exists"
-        is_rotated = rotation_info is not None
-
-        # Create and add overlays with is_rotated=True
-        elevation = create_overlay_element('Game_Elevation_Overlay')
-        hillside = create_overlay_element('Game_Hillside_Shading')
-        labels = create_overlay_element('Game_Hex_Labels')
-
-        add_game_layers(tree, elevation, hillside, labels, is_rotated=is_rotated)
-
-        # Verify overlays ARE inside Rotated_Content
-        root = tree.getroot()
-        rotated_content = None
-        for elem in root.iter():
-            if elem.get('id') == 'Rotated_Content':
-                rotated_content = elem
-                break
-
-        child_ids = [child.get('id') for child in rotated_content]
-        assert 'Game_Elevation_Overlay' in child_ids, \
-            "Elevation overlay should be inside Rotated_Content for rotated maps"
-        assert 'Game_Hillside_Shading' in child_ids, \
-            "Hillside shading should be inside Rotated_Content for rotated maps"
-
-        # Verify labels are NOT inside Rotated_Content (stay readable)
-        assert 'Game_Hex_Labels' not in child_ids, \
-            "Hex labels should NOT be inside Rotated_Content"
-
-    def test_non_rotated_map_workflow(self):
-        """Test the complete workflow for non-rotated maps."""
-        tree = create_minimal_svg(with_rotation=False)
-
-        # Detect rotation (should be None)
-        rotation_info = get_rotation_info(tree)
-        assert rotation_info is None
-        is_rotated = rotation_info is not None
-
-        # Create and add overlays
-        elevation = create_overlay_element('Game_Elevation_Overlay')
-        hillside = create_overlay_element('Game_Hillside_Shading')
-        labels = create_overlay_element('Game_Hex_Labels')
-
-        add_game_layers(tree, elevation, hillside, labels, is_rotated=is_rotated)
-
-        # Verify overlays are before Hex_Grid in Master_Content
-        root = tree.getroot()
-        master = None
-        for elem in root.iter():
-            if elem.get('id') == 'Master_Content':
-                master = elem
-                break
-
-        child_ids = [child.get('id') for child in master]
-
-        # Should have elevation and hillside in Master_Content
-        assert 'Game_Elevation_Overlay' in child_ids
-        assert 'Game_Hillside_Shading' in child_ids
-
-    def test_different_placement_for_rotated_vs_non_rotated(self):
-        """Test that overlay placement differs for rotated and non-rotated maps."""
-        # Create both map types
-        rotated_tree = create_minimal_svg(with_rotation=True, rotation_angle=-30)
-        non_rotated_tree = create_minimal_svg(with_rotation=False)
-
-        # Add overlays with appropriate is_rotated flag
-        for tree, is_rotated in [(rotated_tree, True), (non_rotated_tree, False)]:
-            elevation = create_overlay_element('Game_Elevation_Overlay')
-            hillside = create_overlay_element('Game_Hillside_Shading')
-            labels = create_overlay_element('Game_Hex_Labels')
-            add_game_layers(tree, elevation, hillside, labels, is_rotated=is_rotated)
-
-        # Rotated: overlays should be in Rotated_Content
-        root = rotated_tree.getroot()
-        rotated_content = None
-        for elem in root.iter():
-            if elem.get('id') == 'Rotated_Content':
-                rotated_content = elem
-                break
-        rotated_child_ids = [child.get('id') for child in rotated_content]
-        assert 'Game_Elevation_Overlay' in rotated_child_ids, \
-            "Rotated map: overlays should be inside Rotated_Content"
-
-        # Non-rotated: overlays should be in Master_Content (not Rotated_Content)
-        root = non_rotated_tree.getroot()
-        master = None
-        for elem in root.iter():
-            if elem.get('id') == 'Master_Content':
-                master = elem
-                break
-        master_child_ids = [child.get('id') for child in master]
-        assert 'Game_Elevation_Overlay' in master_child_ids, \
-            "Non-rotated map: overlays should be in Master_Content"
 
 
 if __name__ == '__main__':

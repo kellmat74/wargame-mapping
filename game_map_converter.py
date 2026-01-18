@@ -30,6 +30,11 @@ TERRAIN_COLORS_TEMPERATE = {
     "marsh": "#8EBDB5",      # Blue-green
     "open": "#C8D4A8",       # Light olive/tan
     "sand": "#D4C8A0",       # Sandy tan
+    "farmland": "#D4D4A0",   # Pale yellow-tan
+    "wetland": "#9DBDB5",    # Muted blue-green
+    "heath": "#C8B878",      # Muted yellow-brown
+    "mangrove": "#5A8A6A",   # Dark muted green
+    "rocky": "#A89888",      # Grey-brown
 }
 
 TERRAIN_COLORS_ARID = {
@@ -40,6 +45,11 @@ TERRAIN_COLORS_ARID = {
     "marsh": "#8EBDB5",      # Blue-green
     "open": "#D4C8A0",       # Tan/khaki
     "sand": "#E0D4B0",       # Light sand
+    "farmland": "#DED8B0",   # Pale tan
+    "wetland": "#9DBDB5",    # Muted blue-green
+    "heath": "#D4C890",      # Dusty yellow
+    "mangrove": "#7A9A7A",   # Dusty green
+    "rocky": "#B8A898",      # Light grey-brown
 }
 
 # Frame color (dark maroon from DA PrePRESS reference maps)
@@ -54,6 +64,12 @@ TERRAIN_LAYER_TO_KEY = {
     'Terrain_Orchard': 'orchard',
     'Terrain_Marsh': 'marsh',
     'Sand': 'sand',
+    'Farmland': 'farmland',
+    'Wetland': 'wetland',
+    'Heath': 'heath',
+    'Mangrove': 'mangrove',
+    'Rocky_Terrain': 'rocky',
+    'Waterways_Area': 'water',  # Uses same color as water
 }
 
 # Elevation tint darkness per band (0-6)
@@ -406,7 +422,8 @@ def generate_elevation_overlays(
     hex_data: dict,
     hex_centers: dict,
     elevation_bands: dict,
-    intensity: float = 1.0
+    intensity: float = 1.0,
+    band_opacities: list = None
 ) -> ET.Element:
     """
     Generate semi-transparent overlay polygons for elevation tinting.
@@ -416,6 +433,8 @@ def generate_elevation_overlays(
         hex_centers: Dict mapping (q, r) to (cx, cy) from extract_hex_positions_from_svg
         elevation_bands: Dict mapping (q, r) to relative elevation band (0-6)
         intensity: Multiplier for tint opacity (default 1.0)
+        band_opacities: Optional list of 7 opacity values for bands 0-6
+                       (overrides ELEVATION_TINT_OPACITY defaults)
 
     Returns:
         SVG group element containing elevation overlays
@@ -425,6 +444,12 @@ def generate_elevation_overlays(
     hex_size_m = hex_data['metadata']['hex_size_m']
     size = hex_size_m / math.sqrt(3)  # Center to vertex
 
+    # Build opacity lookup from custom values or defaults
+    if band_opacities and len(band_opacities) >= 7:
+        opacity_lookup = {i: band_opacities[i] for i in range(7)}
+    else:
+        opacity_lookup = ELEVATION_TINT_OPACITY
+
     overlay_count = 0
     for hex_info in hex_data['hexes']:
         q, r = hex_info['coord']
@@ -433,7 +458,7 @@ def generate_elevation_overlays(
         elevation_band = elevation_bands.get((q, r), 0)
 
         # Skip if no tinting needed
-        opacity = ELEVATION_TINT_OPACITY.get(elevation_band, 0) * intensity
+        opacity = opacity_lookup.get(elevation_band, 0) * intensity
         if opacity <= 0:
             continue
 
@@ -462,7 +487,9 @@ def generate_elevation_overlays(
 def generate_game_hex_labels(
     hex_data: dict,
     hex_centers: dict,
-    label_rows: list = None
+    label_rows: list = None,
+    label_color: str = '#5e5959',
+    label_opacity: float = 0.7
 ) -> ET.Element:
     """
     Generate hex labels only for specified rows.
@@ -471,6 +498,8 @@ def generate_game_hex_labels(
         hex_data: Hex data from JSON
         hex_centers: Dict mapping (q, r) to (cx, cy) from extract_hex_positions_from_svg
         label_rows: List of row numbers to label (1-indexed)
+        label_color: Hex color for label text (default '#5e5959')
+        label_opacity: Opacity for label text (0.0-1.0, default 0.7)
 
     Returns:
         SVG group element containing hex labels
@@ -535,8 +564,8 @@ def generate_game_hex_labels(
             'text-anchor': 'middle',
             'font-family': 'Arial, sans-serif',
             'font-size': str(label_size_m),
-            'fill': '#5e5959',
-            'fill-opacity': '0.7',
+            'fill': label_color,
+            'fill-opacity': str(label_opacity),
         })
         text.text = label_text
 
@@ -632,7 +661,8 @@ def generate_hillside_shading(
     hex_centers: dict,
     elevation_bands: dict,
     terrain_style: str = 'temperate',
-    intensity: float = 1.0
+    intensity: float = 1.0,
+    shade_color: str = None
 ) -> ET.Element:
     """
     Generate hillside shading bands along edges where elevation drops.
@@ -646,6 +676,7 @@ def generate_hillside_shading(
         elevation_bands: Dict mapping (q, r) to relative elevation band (0-6)
         terrain_style: 'temperate' or 'arid' for color selection
         intensity: Opacity multiplier (default 1.0)
+        shade_color: Optional custom color for hillside shading (overrides style-based color)
 
     Returns:
         SVG group element containing hillside shading polygons
@@ -658,8 +689,11 @@ def generate_hillside_shading(
     # Hillside band width (as fraction of hex size)
     band_width = size * 0.15  # 15% of center-to-vertex distance
 
-    # Select color based on terrain style
-    shade_color = HILLSIDE_COLORS.get(terrain_style, HILLSIDE_COLORS['temperate'])
+    # Select color: use custom color if provided, otherwise use style-based color
+    if shade_color:
+        final_shade_color = shade_color
+    else:
+        final_shade_color = HILLSIDE_COLORS.get(terrain_style, HILLSIDE_COLORS['temperate'])
     base_opacity = 1.0 * intensity
 
     shading_count = 0
@@ -716,7 +750,7 @@ def generate_hillside_shading(
 
             polygon = ET.SubElement(group, 'polygon', {
                 'points': points,
-                'fill': shade_color,
+                'fill': final_shade_color,
                 'fill-opacity': str(opacity),
                 'stroke': 'none',
             })
@@ -761,6 +795,127 @@ def unhide_game_overlays(tree: ET.ElementTree) -> bool:
 
     if found_elevation or found_hillside:
         print(f"  Warning: Only found one overlay layer, generating missing ones")
+
+    return False
+
+
+def recolor_hillside_shading(tree: ET.ElementTree, shade_color: str, intensity: float = None) -> bool:
+    """
+    Recolor pre-generated hillside shading polygons.
+
+    Args:
+        tree: SVG ElementTree to modify
+        shade_color: New fill color for hillside shading
+        intensity: Optional intensity multiplier for opacity (None = keep existing)
+
+    Returns:
+        True if hillside shading was found and recolored, False otherwise
+    """
+    root = tree.getroot()
+
+    for elem in root.iter():
+        if elem.get('id') == 'Game_Hillside_Shading':
+            polygon_count = 0
+            for child in elem.iter():
+                tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                if tag == 'polygon':
+                    child.set('fill', shade_color)
+                    if intensity is not None:
+                        # Scale existing opacity by intensity ratio
+                        old_opacity = float(child.get('fill-opacity', '1.0'))
+                        # Note: We can't know the "base" opacity, so intensity is relative
+                        # For intensity=0, hide completely; otherwise scale
+                        if intensity == 0:
+                            child.set('fill-opacity', '0')
+                        else:
+                            new_opacity = min(old_opacity * intensity, 0.6)
+                            child.set('fill-opacity', str(new_opacity))
+                    polygon_count += 1
+            if polygon_count > 0:
+                print(f"  Recolored {polygon_count} hillside shading polygons to {shade_color}")
+                return True
+
+    return False
+
+
+def adjust_elevation_overlay_intensity(tree: ET.ElementTree, intensity: float) -> bool:
+    """
+    Adjust the intensity of pre-generated elevation overlays.
+
+    Args:
+        tree: SVG ElementTree to modify
+        intensity: Intensity multiplier (1.0 = default, 0 = invisible, 2.0 = double)
+
+    Returns:
+        True if elevation overlay was found and adjusted, False otherwise
+    """
+    root = tree.getroot()
+
+    for elem in root.iter():
+        if elem.get('id') == 'Game_Elevation_Overlay':
+            polygon_count = 0
+            for child in elem.iter():
+                tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                if tag == 'polygon':
+                    old_opacity = float(child.get('fill-opacity', '0'))
+                    # Scale opacity by intensity
+                    if intensity == 0:
+                        child.set('fill-opacity', '0')
+                    else:
+                        new_opacity = min(old_opacity * intensity, 0.9)
+                        child.set('fill-opacity', str(new_opacity))
+                    polygon_count += 1
+            if polygon_count > 0:
+                print(f"  Adjusted {polygon_count} elevation overlay polygons (intensity: {intensity}x)")
+                return True
+
+    return False
+
+
+def apply_custom_band_opacities(tree: ET.ElementTree, band_opacities: list, intensity: float = 1.0) -> bool:
+    """
+    Apply custom per-band opacities to pre-generated elevation overlays.
+
+    Requires polygons to have 'data-band' attribute (added in v2.1.2+).
+    Falls back to intensity-only adjustment for older maps without band metadata.
+
+    Args:
+        tree: SVG ElementTree to modify
+        band_opacities: List of 7 opacity values for bands 0-6
+        intensity: Additional intensity multiplier (default 1.0)
+
+    Returns:
+        True if elevation overlay was found and adjusted, False otherwise
+    """
+    root = tree.getroot()
+
+    for elem in root.iter():
+        if elem.get('id') == 'Game_Elevation_Overlay':
+            polygon_count = 0
+            has_band_metadata = False
+
+            for child in elem.iter():
+                tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                if tag == 'polygon':
+                    # Check for band metadata (data-band attribute)
+                    band_str = child.get('data-band')
+                    if band_str is not None:
+                        has_band_metadata = True
+                        band = int(band_str)
+                        if 0 <= band < len(band_opacities):
+                            new_opacity = band_opacities[band] * intensity
+                            child.set('fill-opacity', str(min(new_opacity, 0.9)))
+                    polygon_count += 1
+
+            if polygon_count > 0:
+                if has_band_metadata:
+                    print(f"  Applied custom band opacities to {polygon_count} elevation polygons")
+                else:
+                    print(f"  Warning: No band metadata found - regenerate detail map to enable custom band opacities")
+                    # Fall back to intensity-only adjustment
+                    if intensity != 1.0:
+                        return adjust_elevation_overlay_intensity(tree, intensity)
+                return True
 
     return False
 
@@ -860,19 +1015,28 @@ def hide_detail_layers(tree: ET.ElementTree) -> None:
     print(f"  Hidden {hidden_count} detail layers: {', '.join(layers_to_hide)}")
 
 
-def recolor_terrain_layers(tree: ET.ElementTree, palette: dict) -> int:
+def recolor_terrain_layers(tree: ET.ElementTree, palette: dict, custom_colors: dict = None) -> int:
     """
     Recolor terrain layers based on the selected color palette.
 
     Args:
         tree: SVG ElementTree to modify in place
         palette: Terrain color palette dict (e.g., TERRAIN_COLORS_TEMPERATE)
+        custom_colors: Optional dict of custom terrain colors to override palette
+                      (keys: water, urban, forest, orchard, marsh, open, sand)
 
     Returns:
         Number of layers recolored
     """
     root = tree.getroot()
     recolored_count = 0
+
+    # Merge custom colors into palette if provided
+    if custom_colors:
+        palette = palette.copy()  # Don't modify original
+        for key, color in custom_colors.items():
+            if color:  # Only override if a value was provided
+                palette[key] = color
 
     for elem in root.iter():
         elem_id = elem.get('id', '')
@@ -899,107 +1063,6 @@ def recolor_terrain_layers(tree: ET.ElementTree, palette: dict) -> int:
         print(f"    Recolored {elem_id} to {new_color}")
 
     return recolored_count
-
-
-def add_game_layers(
-    tree: ET.ElementTree,
-    elevation_overlay: ET.Element,
-    hillside_shading: ET.Element,
-    hex_labels: ET.Element,
-    is_rotated: bool = False
-) -> None:
-    """
-    Add game map layers to SVG at appropriate positions.
-
-    For ROTATED maps:
-    - Overlays are placed INSIDE Rotated_Content so they rotate with terrain
-    - This ensures overlays visually align with the terrain features they represent
-    - Hex_Markers coordinates work directly because they use the same pre-rotation
-      coordinate system as the terrain layers
-
-    For NON-ROTATED maps:
-    - Overlays are placed as siblings of Hex_Grid (outside any rotation group)
-
-    Hex labels are ALWAYS placed outside rotation to remain readable.
-
-    Z-order for rotated maps (bottom to top):
-    - Rotated_Content:
-        - Terrain layers
-        - Game_Elevation_Overlay (rotates with terrain)
-        - Game_Hillside_Shading (rotates with terrain)
-    - Hex_Grid (axis-aligned)
-    - Hex_Markers
-    - Game_Hex_Labels (at end, axis-aligned)
-
-    Args:
-        tree: SVG ElementTree to modify
-        elevation_overlay: Elevation overlay group
-        hillside_shading: Hillside shading group
-        hex_labels: Game hex labels group
-        is_rotated: Whether the map has rotation applied
-    """
-    root = tree.getroot()
-
-    # Find element and its parent
-    def find_element_and_parent(parent, target_id):
-        for idx, child in enumerate(parent):
-            if child.get('id') == target_id:
-                return parent, idx, child
-            result = find_element_and_parent(child, target_id)
-            if result:
-                return result
-        return None
-
-    if is_rotated:
-        # For rotated maps, place overlays INSIDE Rotated_Content
-        # so they rotate with the terrain
-        result = find_element_and_parent(root, 'Rotated_Content')
-        if result:
-            _, _, rotated_content = result
-            # Insert at end of Rotated_Content (above terrain, below Out_Of_Play_Frame)
-            rotated_content.append(elevation_overlay)
-            rotated_content.append(hillside_shading)
-            print(f"  Inserted overlays inside Rotated_Content (will rotate with terrain)")
-        else:
-            # Fallback if Rotated_Content not found (shouldn't happen for rotated maps)
-            print(f"  Warning: Rotated_Content not found, falling back to non-rotated placement")
-            is_rotated = False  # Fall through to non-rotated logic
-
-    if not is_rotated:
-        # For non-rotated maps, insert overlays BEFORE Hex_Grid
-        result = find_element_and_parent(root, 'Hex_Grid')
-
-        if result:
-            parent, idx, hex_grid = result
-            parent_id = parent.get('id', 'unknown')
-            print(f"  Found Hex_Grid at index {idx} in parent '{parent_id}'")
-
-            # Insert overlays BEFORE Hex_Grid (so they're below grid lines but above terrain)
-            parent.insert(idx, hillside_shading)
-            parent.insert(idx, elevation_overlay)  # This goes before hillside
-            print(f"  Inserted overlays before Hex_Grid")
-        else:
-            # Fallback: find Master_Content and insert at end
-            result = find_element_and_parent(root, 'Master_Content')
-            if result:
-                _, _, master_content = result
-                master_content.append(elevation_overlay)
-                master_content.append(hillside_shading)
-                print(f"  Fallback: Inserted overlays at end of Master_Content")
-            else:
-                # Last resort: after first group
-                for idx, child in enumerate(root):
-                    tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                    if tag == 'g':
-                        root.insert(idx + 1, elevation_overlay)
-                        root.insert(idx + 2, hillside_shading)
-                        print(f"  Last resort: Inserted overlays after first group")
-                        break
-
-    # Add hex labels at the end (on top) - always outside rotation for readability
-    if hex_labels is not None:
-        root.append(hex_labels)
-        print("  Added game hex labels at top")
 
 
 def export_svg(tree: ET.ElementTree, output_path: Path) -> None:
@@ -1262,10 +1325,14 @@ def convert_single_sheet(
 
     # Select terrain palette and determine actual style
     terrain_style = config.get('terrain_style', 'auto')
-    if terrain_style == 'auto':
+    if terrain_style == 'auto' or terrain_style == 'custom':
+        # Auto-detect base palette, custom colors will be merged later
         palette = get_terrain_palette(center_lat, center_lon)
         actual_style = 'arid' if abs(center_lat) < 35 else 'temperate'
-        print(f"  Auto-detected palette: {actual_style}")
+        if terrain_style == 'custom':
+            print(f"  Using custom colors (base palette: {actual_style})")
+        else:
+            print(f"  Auto-detected palette: {actual_style}")
     else:
         palette = get_terrain_palette(center_lat, center_lon, terrain_style)
         actual_style = terrain_style
@@ -1273,7 +1340,8 @@ def convert_single_sheet(
 
     # Recolor terrain layers based on selected palette
     print("\nRecoloring terrain...")
-    recolored = recolor_terrain_layers(tree, palette)
+    custom_colors = config.get('terrain_colors')
+    recolored = recolor_terrain_layers(tree, palette, custom_colors)
     print(f"  Recolored {recolored} terrain layers")
 
     # Check if map has rotation
@@ -1305,45 +1373,41 @@ def convert_single_sheet(
 
     print("\nProcessing game map overlays...")
 
-    # Try to unhide pre-generated overlay layers (new approach - layers generated during detail map creation)
-    # These are already in the correct coordinate system and position (inside Rotated_Content for rotated maps)
+    # Unhide pre-generated overlay layers (generated during detail map creation in tactical_map.py)
+    # These are positioned correctly for rotated maps (outside Rotated_Content, aligned with Hex_Grid)
     overlays_unhidden = unhide_game_overlays(tree)
 
     if not overlays_unhidden:
-        # Fallback for older maps without pre-generated overlays: generate them here
-        print("  Pre-generated overlays not found, generating (fallback for older maps)...")
-
-        # Get elevation band interval from hexdata metadata (or use default for older maps)
-        band_interval_config = hex_data.get('metadata', {}).get('elevation_band_interval', 'auto')
-        if str(band_interval_config).lower() == 'auto':
-            # For fallback generation with auto, use default interval
-            band_interval = ELEVATION_BAND_INTERVAL
-        else:
-            try:
-                band_interval = int(band_interval_config)
-            except (ValueError, TypeError):
-                band_interval = ELEVATION_BAND_INTERVAL
-
-        print("\nCalculating relative elevation bands...")
-        elevation_bands = calculate_relative_elevation_bands(hex_data, band_interval)
-
-        # Generate elevation overlays
-        elevation_intensity = config.get('elevation_intensity', 1.0)
-        elevation_overlay = generate_elevation_overlays(
-            hex_data, hex_centers, elevation_bands, elevation_intensity
+        raise ValueError(
+            f"Pre-generated overlays not found in {svg_path.name}. "
+            "This map may have been generated with an older version. "
+            "Please re-generate the detailed map first."
         )
 
-        # Generate hillside shading for elevation transitions
-        hillside_shading = generate_hillside_shading(
-            hex_data, hex_centers, elevation_bands, actual_style, elevation_intensity
-        )
+    # Apply custom settings to pre-generated overlays
+    hillside_color = config.get('hillside_color')
+    hillside_intensity = config.get('hillside_intensity')
+    elevation_intensity = config.get('elevation_intensity', 1.0)
+    band_opacities = config.get('elevation_band_opacities')
 
-        # Add generated overlays to SVG (only when not using pre-generated ones)
-        add_game_layers(tree, elevation_overlay, hillside_shading, None, is_rotated)
+    # Recolor hillside shading if custom color provided
+    if hillside_color:
+        recolor_hillside_shading(tree, hillside_color, hillside_intensity)
+    elif hillside_intensity is not None and hillside_intensity != 1.0:
+        # Just adjust intensity without changing color
+        recolor_hillside_shading(tree, HILLSIDE_COLORS.get(actual_style, '#6B7A60'), hillside_intensity)
+
+    # Apply custom band opacities if provided, otherwise just adjust intensity
+    if band_opacities and len(band_opacities) >= 7:
+        apply_custom_band_opacities(tree, band_opacities, elevation_intensity)
+    elif elevation_intensity != 1.0:
+        adjust_elevation_overlay_intensity(tree, elevation_intensity)
 
     # Generate game hex labels (always needed, uses screen-space coordinates)
     label_rows = config.get('label_rows', LABEL_ROWS)
-    hex_labels = generate_game_hex_labels(hex_data, hex_centers, label_rows)
+    label_color = config.get('label_color', '#5e5959')
+    label_opacity = config.get('label_opacity', 0.7)
+    hex_labels = generate_game_hex_labels(hex_data, hex_centers, label_rows, label_color, label_opacity)
     print(f"  Created hex labels (rows: {label_rows})")
 
     # Handle out-of-play frame
@@ -1396,10 +1460,19 @@ def convert_to_game_map(
     Args:
         detailed_map_dir: Path to detailed map folder (contains SVG and hexdata.json)
         config: Optional configuration dict with:
-            - terrain_style: 'auto', 'temperate', or 'arid'
-            - elevation_intensity: float multiplier (default 1.0)
-            - frame_color: hex color string
-            - label_rows: list of row numbers to label
+            - terrain_style: 'auto', 'temperate', 'arid', or 'custom'
+            - elevation_intensity: float multiplier for elevation overlays (0.0-2.0, default 1.0)
+            - hillside_intensity: float multiplier for hillside shading (0.0-2.0, default 1.0)
+            - hillside_color: hex color string for hillside shading (e.g., '#6B7A60')
+            - frame_color: hex color string for border frame (default '#6B2D2D')
+            - terrain_colors: dict of custom terrain colors:
+                {water, urban, forest, orchard, marsh, open, sand}
+            - elevation_band_opacities: list of 7 floats for bands 0-6 (0.0-1.0)
+                Default: [0.0, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60]
+            - label_rows: list of row numbers to label (1-indexed)
+                Default: [1, 5, 10, 15, 20, 25]
+            - label_color: hex color string for label text (default '#5e5959')
+            - label_opacity: float for label opacity (0.0-1.0, default 0.7)
 
     Returns:
         Path to output game_map folder
