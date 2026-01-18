@@ -482,8 +482,11 @@ def generate_game_hex_labels(
 
     hex_size_m = hex_data['metadata']['hex_size_m']
 
-    # Label size and positioning (match tactical_map.py)
-    label_size_m = 25  # Font size in meters
+    # Scale label size based on hex size (25m at 250m hex size)
+    hex_scale = hex_size_m / 250.0
+    label_size_m = 25 * hex_scale  # Font size in meters, scaled
+    halo_stroke_width = 3 * hex_scale  # Halo stroke width, scaled
+
     size = hex_size_m / math.sqrt(3)  # Center to vertex
     half_height = size * math.sqrt(3) / 2  # Center to flat edge (top/bottom)
 
@@ -520,7 +523,7 @@ def generate_game_hex_labels(
             'font-size': str(label_size_m),
             'fill': 'none',
             'stroke': '#e8e8e8',
-            'stroke-width': '3',
+            'stroke-width': str(halo_stroke_width),
             'stroke-opacity': '0.4',
         })
         halo.text = label_text
