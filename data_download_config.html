@@ -24,35 +24,6 @@
             font-size: 24px;
         }
 
-        .header-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-
-        .restart-btn {
-            padding: 8px 16px;
-            background: #2d4a3e;
-            border: 1px solid #3d6a4e;
-            border-radius: 4px;
-            color: #8fbc8f;
-            font-size: 13px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        .restart-btn:hover {
-            background: #3d6a4e;
-            border-color: #5a9a6a;
-            color: #fff;
-        }
-
-        .restart-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
         .nav-tabs {
             display: flex;
             gap: 10px;
@@ -362,10 +333,7 @@
 </head>
 <body>
     <div class="container">
-        <div class="header-row">
-            <h1>Wargame Map Generator</h1>
-            <button class="restart-btn" onclick="restartServer()" title="Restart server to pick up code changes">&#x27F3; Restart Server</button>
-        </div>
+        <h1>Wargame Map Generator</h1>
 
         <div class="nav-tabs">
             <a href="/" class="nav-tab">Detailed Map</a>
@@ -437,51 +405,6 @@
     </div>
 
     <script>
-        // ============================================
-        // Server Management
-        // ============================================
-
-        async function restartServer() {
-            const btn = document.querySelector('.restart-btn');
-            const originalText = btn.textContent;
-            btn.disabled = true;
-            btn.textContent = 'Restarting...';
-
-            try {
-                await fetch('/api/restart', { method: 'POST' });
-            } catch (e) {
-                // Expected - server is shutting down
-            }
-
-            btn.textContent = 'Reconnecting...';
-            let attempts = 0;
-            const maxAttempts = 20;
-
-            const tryReconnect = async () => {
-                try {
-                    const response = await fetch('/api/defaults');
-                    if (response.ok) {
-                        btn.textContent = originalText;
-                        btn.disabled = false;
-                        location.reload();
-                        return;
-                    }
-                } catch (e) {
-                    // Server not ready yet
-                }
-
-                attempts++;
-                if (attempts < maxAttempts) {
-                    setTimeout(tryReconnect, 500);
-                } else {
-                    btn.textContent = 'Restart failed';
-                    btn.disabled = false;
-                }
-            };
-
-            setTimeout(tryReconnect, 1000);
-        }
-
         // ============================================
         // State
         // ============================================

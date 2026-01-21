@@ -847,25 +847,6 @@ def shutdown():
     return jsonify({'success': True, 'message': 'Server shutting down...'})
 
 
-@app.route('/api/restart', methods=['POST'])
-def restart_server():
-    """Restart the server to pick up code changes."""
-    def do_restart():
-        import time
-        time.sleep(0.3)  # Give time for response to be sent
-        # Spawn new server process with delay flag (waits for port to be free)
-        subprocess.Popen(
-            [sys.executable, __file__, '--no-browser', '--restart-delay'],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            start_new_session=True
-        )
-        time.sleep(0.1)  # Brief pause before exiting
-        os._exit(0)  # Exit current process - releases port for new server
-
-    threading.Thread(target=do_restart, daemon=True).start()
-    return jsonify({'success': True, 'message': 'Server restarting...'})
-
-
 # === Geofabrik Data Download Routes ===
 
 # Store for Geofabrik download status
@@ -1104,12 +1085,6 @@ def get_geofabrik_status():
 if __name__ == '__main__':
     PORT = 8080  # Using 8080 to avoid conflict with AirPlay on macOS
 
-    # If restarting, wait for old server to release the port
-    if '--restart-delay' in sys.argv:
-        import time
-        # Wait for old server to fully exit and release port
-        time.sleep(1.5)
-
     print("=" * 50)
     print("Tactical Map Generator - Web Server")
     print("=" * 50)
@@ -1119,7 +1094,7 @@ if __name__ == '__main__':
     print("Press Ctrl+C to stop the server")
     print("=" * 50)
 
-    # Open browser automatically (optional - skip if restarting)
+    # Open browser automatically (can be skipped with --no-browser flag)
     if '--no-browser' not in sys.argv:
         import webbrowser
         webbrowser.open(f'http://localhost:{PORT}')
