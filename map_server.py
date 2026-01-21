@@ -815,6 +815,7 @@ def shutdown():
     global generation_status
 
     def stop_server():
+        import time
         # Give time for response to be sent
         time.sleep(0.5)
 
