@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geofabrik Data Download</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        }
+
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+
+        h1 {
+            margin: 0;
+            color: #00d4ff;
+            font-size: 24px;
+        }
+
+        .header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .restart-btn {
+            padding: 8px 16px;
+            background: #2d4a3e;
+            border: 1px solid #3d6a4e;
+            border-radius: 4px;
+            color: #8fbc8f;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .restart-btn:hover {
+            background: #3d6a4e;
+            border-color: #5a9a6a;
+            color: #fff;
+        }
+
+        .restart-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .nav-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .nav-tab {
+            padding: 10px 20px;
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            color: #aaa;
+            text-decoration: none;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .nav-tab:hover {
+            border-color: #00d4ff;
+            color: #fff;
+        }
+
+        .nav-tab.active {
+            background: #0f3460;
+            color: #00d4ff;
+            border-color: #00d4ff;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .panel {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid #0f3460;
+        }
+
+        .panel h2 {
+            margin: 0 0 15px 0;
+            font-size: 16px;
+            color: #00d4ff;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+
+        .input-field {
+            flex: 1;
+            min-width: 150px;
+        }
+
+        .input-field label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: #aaa;
+            text-transform: uppercase;
+        }
+
+        .input-field select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            background: #1a1a2e;
+            color: #fff;
+            font-size: 14px;
+        }
+
+        .input-field select:focus {
+            outline: none;
+            border-color: #00d4ff;
+        }
+
+        .input-field select:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .input-field.hidden {
+            display: none;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #00d4ff;
+            color: #000;
+        }
+
+        .btn-primary:hover {
+            background: #00a8cc;
+        }
+
+        .btn-primary:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #0f3460;
+            color: #fff;
+            border: 1px solid #0f3460;
+        }
+
+        .btn-secondary:hover {
+            border-color: #00d4ff;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        /* Progress panel */
+        .progress-panel {
+            display: none;
+        }
+
+        .progress-panel.visible {
+            display: block;
+        }
+
+        .progress-output {
+            background: #0a0a15;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            padding: 15px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-indicator.running {
+            background: #ff9800;
+            animation: pulse 1s infinite;
+        }
+
+        .status-indicator.complete {
+            background: #4CAF50;
+        }
+
+        .status-indicator.error {
+            background: #f44336;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Downloaded regions list */
+        .region-list {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+        }
+
+        .region-item {
+            padding: 12px 15px;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .region-item:last-child {
+            border-bottom: none;
+        }
+
+        .region-item:hover {
+            background: #1a1a2e;
+        }
+
+        .region-info {
+            flex: 1;
+        }
+
+        .region-name {
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .region-details {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+
+        .region-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            background: #0f3460;
+            color: #aaa;
+            border-radius: 10px;
+            font-size: 10px;
+            margin-left: 10px;
+            text-transform: capitalize;
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .empty-state p {
+            margin: 10px 0;
+        }
+
+        /* Refresh button */
+        .refresh-btn-small {
+            background: none;
+            border: 1px solid #0f3460;
+            color: #aaa;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: auto;
+        }
+
+        .refresh-btn-small:hover {
+            border-color: #00d4ff;
+            color: #00d4ff;
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .panel-header h2 {
+            margin: 0;
+        }
+
+        /* Info text */
+        .info-text {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 15px;
+        }
+
+        .info-text a {
+            color: #00d4ff;
+        }
+
+        /* Selection summary */
+        .selection-summary {
+            font-size: 13px;
+            color: #aaa;
+            margin-top: 10px;
+            padding: 10px;
+            background: #0a0a15;
+            border-radius: 4px;
+            display: none;
+        }
+
+        .selection-summary.visible {
+            display: block;
+        }
+
+        .selection-summary strong {
+            color: #00d4ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header-row">
+            <h1>Wargame Map Generator</h1>
+            <button class="restart-btn" onclick="restartServer()" title="Restart server to pick up code changes">&#x27F3; Restart Server</button>
+        </div>
+
+        <div class="nav-tabs">
+            <a href="/" class="nav-tab">Detailed Map</a>
+            <a href="/game-map" class="nav-tab">Game Map Conversion</a>
+            <a href="/data-download" class="nav-tab active">Data Download</a>
+        </div>
+
+        <!-- Download Panel -->
+        <div class="panel">
+            <h2>Download Geofabrik Data</h2>
+            <p class="info-text">
+                Download OpenStreetMap regional data from <a href="https://download.geofabrik.de" target="_blank">Geofabrik</a>.
+                Select a country to download entire country data, or select a subregion for smaller downloads.
+            </p>
+
+            <div class="input-group">
+                <div class="input-field">
+                    <label>Continent</label>
+                    <select id="continentSelect" onchange="onContinentChange()">
+                        <option value="">Select continent...</option>
+                    </select>
+                </div>
+                <div class="input-field">
+                    <label>Country</label>
+                    <select id="countrySelect" onchange="onCountryChange()" disabled>
+                        <option value="">Select country...</option>
+                    </select>
+                </div>
+                <div class="input-field" id="subregionField">
+                    <label>Subregion <span style="color: #666">(optional)</span></label>
+                    <select id="subregionSelect" onchange="onSubregionChange()" disabled>
+                        <option value="">Download entire country</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="selection-summary" id="selectionSummary">
+                Will download: <strong id="downloadTarget">-</strong>
+            </div>
+
+            <div class="button-row">
+                <button id="downloadBtn" class="btn btn-primary" onclick="startDownload()" disabled>
+                    Download
+                </button>
+            </div>
+        </div>
+
+        <!-- Progress Panel -->
+        <div class="panel progress-panel" id="progressPanel">
+            <h2>
+                <span class="status-indicator running" id="statusIndicator"></span>
+                <span id="statusText">Downloading...</span>
+            </h2>
+            <div class="progress-output" id="progressOutput"></div>
+        </div>
+
+        <!-- Downloaded Regions Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2>Downloaded Regions</h2>
+                <button class="refresh-btn-small" onclick="loadDownloaded()">Refresh</button>
+            </div>
+            <div id="downloadedList" class="region-list">
+                <div class="empty-state">
+                    <p>Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================
+        // Server Management
+        // ============================================
+
+        async function restartServer() {
+            const btn = document.querySelector('.restart-btn');
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Restarting...';
+
+            try {
+                await fetch('/api/restart', { method: 'POST' });
+            } catch (e) {
+                // Expected - server is shutting down
+            }
+
+            btn.textContent = 'Reconnecting...';
+            let attempts = 0;
+            const maxAttempts = 20;
+
+            const tryReconnect = async () => {
+                try {
+                    const response = await fetch('/api/defaults');
+                    if (response.ok) {
+                        btn.textContent = originalText;
+                        btn.disabled = false;
+                        location.reload();
+                        return;
+                    }
+                } catch (e) {
+                    // Server not ready yet
+                }
+
+                attempts++;
+                if (attempts < maxAttempts) {
+                    setTimeout(tryReconnect, 500);
+                } else {
+                    btn.textContent = 'Restart failed';
+                    btn.disabled = false;
+                }
+            };
+
+            setTimeout(tryReconnect, 1000);
+        }
+
+        // ============================================
+        // State
+        // ============================================
+
+        let regionsData = {};
+        let downloadedRegions = [];
+
+        // Current selection
+        let selectedContinent = null;
+        let selectedCountry = null;
+        let selectedSubregion = null;
+
+        // ============================================
+        // Initialization
+        // ============================================
+
+        async function init() {
+            await loadRegions();
+            await loadDownloaded();
+        }
+
+        async function loadRegions() {
+            try {
+                const response = await fetch('/api/geofabrik/regions');
+                const data = await response.json();
+                regionsData = data;
+
+                const continentSelect = document.getElementById('continentSelect');
+                continentSelect.innerHTML = '<option value="">Select continent...</option>';
+
+                for (const [continent, info] of Object.entries(data)) {
+                    const option = document.createElement('option');
+                    option.value = continent;
+                    option.textContent = info.display_name;
+                    continentSelect.appendChild(option);
+                }
+            } catch (e) {
+                console.error('Failed to load regions:', e);
+            }
+        }
+
+        async function loadDownloaded() {
+            try {
+                const response = await fetch('/api/geofabrik/downloaded');
+                const data = await response.json();
+                downloadedRegions = data.downloaded || [];
+                renderDownloadedList();
+            } catch (e) {
+                console.error('Failed to load downloaded regions:', e);
+                document.getElementById('downloadedList').innerHTML = `
+                    <div class="empty-state">
+                        <p>Failed to load downloaded regions</p>
+                    </div>
+                `;
+            }
+        }
+
+        // ============================================
+        // UI Updates
+        // ============================================
+
+        function onContinentChange() {
+            const continentSelect = document.getElementById('continentSelect');
+            const countrySelect = document.getElementById('countrySelect');
+            const subregionSelect = document.getElementById('subregionSelect');
+            const downloadBtn = document.getElementById('downloadBtn');
+
+            selectedContinent = continentSelect.value;
+            selectedCountry = null;
+            selectedSubregion = null;
+
+            if (!selectedContinent) {
+                countrySelect.innerHTML = '<option value="">Select country...</option>';
+                countrySelect.disabled = true;
+                subregionSelect.innerHTML = '<option value="">Download entire country</option>';
+                subregionSelect.disabled = true;
+                downloadBtn.disabled = true;
+                updateSelectionSummary();
+                return;
+            }
+
+            const continentData = regionsData[selectedContinent];
+            if (!continentData) return;
+
+            // Populate countries
+            countrySelect.innerHTML = '<option value="">Select country...</option>';
+            for (const [countryName, countryInfo] of Object.entries(continentData.countries)) {
+                const option = document.createElement('option');
+                option.value = countryName;
+                option.textContent = countryInfo.display_name;
+
+                // Mark if country file is downloaded
+                const isDownloaded = downloadedRegions.some(d => d.name === countryName);
+                if (isDownloaded) {
+                    option.textContent += ' (downloaded)';
+                }
+
+                countrySelect.appendChild(option);
+            }
+
+            countrySelect.disabled = false;
+            subregionSelect.innerHTML = '<option value="">Download entire country</option>';
+            subregionSelect.disabled = true;
+            downloadBtn.disabled = true;
+            updateSelectionSummary();
+        }
+
+        function onCountryChange() {
+            const countrySelect = document.getElementById('countrySelect');
+            const subregionSelect = document.getElementById('subregionSelect');
+            const downloadBtn = document.getElementById('downloadBtn');
+
+            selectedCountry = countrySelect.value;
+            selectedSubregion = null;
+
+            if (!selectedCountry) {
+                subregionSelect.innerHTML = '<option value="">Download entire country</option>';
+                subregionSelect.disabled = true;
+                downloadBtn.disabled = true;
+                updateSelectionSummary();
+                return;
+            }
+
+            const continentData = regionsData[selectedContinent];
+            const countryData = continentData?.countries[selectedCountry];
+
+            if (!countryData) return;
+
+            // Check if country has subregions
+            const subregions = countryData.subregions || [];
+
+            if (subregions.length > 0) {
+                // Has subregions - populate dropdown
+                subregionSelect.innerHTML = '<option value="">Download entire country</option>';
+
+                for (const subregion of subregions) {
+                    const option = document.createElement('option');
+                    option.value = subregion.name;
+                    option.textContent = subregion.display_name;
+
+                    // Mark if subregion is downloaded
+                    const isDownloaded = downloadedRegions.some(d => d.name === subregion.name);
+                    if (isDownloaded) {
+                        option.textContent += ' (downloaded)';
+                    }
+
+                    subregionSelect.appendChild(option);
+                }
+
+                subregionSelect.disabled = false;
+            } else {
+                // No subregions - disable dropdown
+                subregionSelect.innerHTML = '<option value="">No subregions available</option>';
+                subregionSelect.disabled = true;
+            }
+
+            // Enable download button (can download country even if subregions exist)
+            downloadBtn.disabled = false;
+            updateSelectionSummary();
+            updateDownloadButton();
+        }
+
+        function onSubregionChange() {
+            const subregionSelect = document.getElementById('subregionSelect');
+            selectedSubregion = subregionSelect.value || null;
+            updateSelectionSummary();
+            updateDownloadButton();
+        }
+
+        function updateSelectionSummary() {
+            const summary = document.getElementById('selectionSummary');
+            const target = document.getElementById('downloadTarget');
+
+            if (!selectedCountry) {
+                summary.classList.remove('visible');
+                return;
+            }
+
+            summary.classList.add('visible');
+
+            const continentData = regionsData[selectedContinent];
+            const countryData = continentData?.countries[selectedCountry];
+
+            if (selectedSubregion) {
+                const subregion = countryData.subregions.find(s => s.name === selectedSubregion);
+                target.textContent = `${subregion?.display_name || selectedSubregion} (${countryData.display_name})`;
+            } else {
+                target.textContent = `${countryData.display_name} (entire country)`;
+            }
+        }
+
+        function updateDownloadButton() {
+            const downloadBtn = document.getElementById('downloadBtn');
+            const targetName = selectedSubregion || selectedCountry;
+
+            if (!targetName) {
+                downloadBtn.textContent = 'Download';
+                return;
+            }
+
+            const isDownloaded = downloadedRegions.some(d => d.name === targetName);
+            downloadBtn.textContent = isDownloaded ? 'Re-download' : 'Download';
+        }
+
+        function renderDownloadedList() {
+            const container = document.getElementById('downloadedList');
+
+            if (downloadedRegions.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <p>No regions downloaded yet</p>
+                        <p>Select a continent, country, and optionally a subregion to download</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = downloadedRegions.map(region => {
+                const date = new Date(region.modified * 1000);
+                const dateStr = date.toLocaleDateString('en-US', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric'
+                });
+
+                return `
+                    <div class="region-item">
+                        <div class="region-info">
+                            <div class="region-name">
+                                ${region.display_name}
+                                <span class="region-badge">${region.continent}</span>
+                            </div>
+                            <div class="region-details">
+                                ${region.size_mb} MB &bull; Downloaded ${dateStr}
+                            </div>
+                        </div>
+                        <button class="btn btn-secondary btn-small" onclick="redownload('${region.name}')">
+                            Re-download
+                        </button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // ============================================
+        // Download Functions
+        // ============================================
+
+        async function startDownload() {
+            if (!selectedCountry) return;
+
+            const downloadBtn = document.getElementById('downloadBtn');
+            const progressPanel = document.getElementById('progressPanel');
+            const progressOutput = document.getElementById('progressOutput');
+            const statusIndicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+
+            // Determine what we're downloading
+            const targetRegion = selectedSubregion || selectedCountry;
+            const displayName = selectedSubregion
+                ? document.getElementById('downloadTarget').textContent
+                : regionsData[selectedContinent]?.countries[selectedCountry]?.display_name || targetRegion;
+
+            // Disable button and show progress
+            downloadBtn.disabled = true;
+            progressPanel.classList.add('visible');
+            progressOutput.textContent = '';
+            statusIndicator.className = 'status-indicator running';
+            statusText.textContent = `Downloading ${displayName}...`;
+
+            try {
+                // Build request body
+                const body = { region: targetRegion };
+
+                // If downloading a subregion, include continent and country for URL building
+                if (selectedSubregion) {
+                    body.continent = selectedContinent;
+                    body.country = selectedCountry;
+                }
+
+                // Start download
+                const response = await fetch('/api/geofabrik/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Download failed');
+                }
+
+                // Connect to progress stream
+                const eventSource = new EventSource('/api/geofabrik/progress');
+
+                eventSource.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+
+                    if (data.type === 'output') {
+                        progressOutput.textContent += data.message + '\n';
+                        progressOutput.scrollTop = progressOutput.scrollHeight;
+                    } else if (data.type === 'complete') {
+                        eventSource.close();
+                        statusIndicator.className = 'status-indicator complete';
+                        statusText.textContent = 'Download complete!';
+                        downloadBtn.disabled = false;
+                        loadDownloaded();
+                    } else if (data.type === 'error') {
+                        eventSource.close();
+                        statusIndicator.className = 'status-indicator error';
+                        statusText.textContent = 'Download failed';
+                        progressOutput.textContent += '\nError: ' + data.message;
+                        downloadBtn.disabled = false;
+                    }
+                };
+
+                eventSource.onerror = () => {
+                    eventSource.close();
+                    statusIndicator.className = 'status-indicator error';
+                    statusText.textContent = 'Connection lost';
+                    downloadBtn.disabled = false;
+                };
+
+            } catch (e) {
+                statusIndicator.className = 'status-indicator error';
+                statusText.textContent = 'Download failed';
+                progressOutput.textContent = 'Error: ' + e.message;
+                downloadBtn.disabled = false;
+            }
+        }
+
+        async function redownload(regionName) {
+            // Try to find the region in our hierarchy and set dropdowns
+            for (const [continent, continentData] of Object.entries(regionsData)) {
+                // Check if it's a country
+                if (regionName in continentData.countries) {
+                    document.getElementById('continentSelect').value = continent;
+                    onContinentChange();
+                    document.getElementById('countrySelect').value = regionName;
+                    onCountryChange();
+                    startDownload();
+                    return;
+                }
+
+                // Check if it's a subregion
+                for (const [country, countryData] of Object.entries(continentData.countries)) {
+                    const subregion = countryData.subregions?.find(s => s.name === regionName);
+                    if (subregion) {
+                        document.getElementById('continentSelect').value = continent;
+                        onContinentChange();
+                        document.getElementById('countrySelect').value = country;
+                        onCountryChange();
+                        document.getElementById('subregionSelect').value = regionName;
+                        onSubregionChange();
+                        startDownload();
+                        return;
+                    }
+                }
+            }
+
+            // Not found in hierarchy - just try to download directly
+            // This handles regions that were downloaded but aren't in our predefined list
+            const downloadBtn = document.getElementById('downloadBtn');
+            const progressPanel = document.getElementById('progressPanel');
+            const progressOutput = document.getElementById('progressOutput');
+            const statusIndicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+
+            downloadBtn.disabled = true;
+            progressPanel.classList.add('visible');
+            progressOutput.textContent = '';
+            statusIndicator.className = 'status-indicator running';
+            statusText.textContent = `Re-downloading ${regionName}...`;
+
+            try {
+                const response = await fetch('/api/geofabrik/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ region: regionName })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Download failed');
+                }
+
+                const eventSource = new EventSource('/api/geofabrik/progress');
+
+                eventSource.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+
+                    if (data.type === 'output') {
+                        progressOutput.textContent += data.message + '\n';
+                        progressOutput.scrollTop = progressOutput.scrollHeight;
+                    } else if (data.type === 'complete') {
+                        eventSource.close();
+                        statusIndicator.className = 'status-indicator complete';
+                        statusText.textContent = 'Download complete!';
+                        downloadBtn.disabled = false;
+                        loadDownloaded();
+                    } else if (data.type === 'error') {
+                        eventSource.close();
+                        statusIndicator.className = 'status-indicator error';
+                        statusText.textContent = 'Download failed';
+                        progressOutput.textContent += '\nError: ' + data.message;
+                        downloadBtn.disabled = false;
+                    }
+                };
+
+                eventSource.onerror = () => {
+                    eventSource.close();
+                    statusIndicator.className = 'status-indicator error';
+                    statusText.textContent = 'Connection lost';
+                    downloadBtn.disabled = false;
+                };
+
+            } catch (e) {
+                statusIndicator.className = 'status-indicator error';
+                statusText.textContent = 'Download failed';
+                progressOutput.textContent = 'Error: ' + e.message;
+                downloadBtn.disabled = false;
+            }
+        }
+
+        // ============================================
+        // Initialize on load
+        // ============================================
+
+        init();
+    </script>
+</body>
+</html>

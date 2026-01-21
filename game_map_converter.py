@@ -70,6 +70,7 @@ TERRAIN_LAYER_TO_KEY = {
     'Mangrove': 'mangrove',
     'Rocky_Terrain': 'rocky',
     'Waterways_Area': 'water',  # Uses same color as water
+    'Ocean': 'water',  # Ocean backdrop for coastal maps
 }
 
 # Elevation tint darkness per band (0-6)

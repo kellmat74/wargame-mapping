@@ -75,6 +75,47 @@ The `game_map_converter.py` transforms detail maps into game-ready maps:
 
 **Important (v1.1.0+):** Elevation overlays are now pre-generated during detail map creation in `tactical_map.py` with `visibility="hidden"`. The game converter just unhides them. This ensures overlays align correctly on rotated maps.
 
+#### Terrain Color Mapping
+
+The game map converter recolors terrain layers from the detailed map. Each SVG layer ID maps to a palette color key:
+
+| SVG Layer ID | Color Key | Description |
+|--------------|-----------|-------------|
+| `Terrain_Open` | open | Default open/clear terrain |
+| `Terrain_Water` | water | Lakes, ponds, water bodies |
+| `Terrain_Forest` | forest | Forested areas |
+| `Terrain_Orchard` | orchard | Orchards, vineyards |
+| `Terrain_Marsh` | marsh | Marshland |
+| `Sand` | sand | Sandy/beach areas |
+| `Farmland` | farmland | Agricultural land |
+| `Wetland` | wetland | Wetland/swamp areas |
+| `Heath` | heath | Heathland/scrubland |
+| `Mangrove` | mangrove | Mangrove forests (coastal) |
+| `Rocky_Terrain` | rocky | Rocky/barren terrain |
+| `Waterways_Area` | water | Rivers, streams (area fill) |
+| `Ocean` | water | Ocean backdrop (coastal maps) |
+
+**Note:** `Terrain_Urban` is not recolored - it stays grey regardless of palette.
+
+**Color Palettes:**
+
+| Terrain | Temperate | Arid |
+|---------|-----------|------|
+| water | #7BA3C4 | #7BA3C4 |
+| urban | #A89880 | #A89880 |
+| forest | #7A9E70 | #9AAE80 |
+| orchard | #8DAE7A | #A8B890 |
+| marsh | #8EBDB5 | #8EBDB5 |
+| open | #C8D4A8 | #D4C8A0 |
+| sand | #D4C8A0 | #E0D4B0 |
+| farmland | #D4D4A0 | #E0D8A8 |
+| wetland | #9DBDB5 | #A8C8C0 |
+| heath | #C8B878 | #D8C888 |
+| mangrove | #5A8A6A | #7A9A7A |
+| rocky | #A89888 | #B8A898 |
+
+The web UI (`game_map_config.html`) allows customizing all terrain colors, elevation band opacities, hillside shading, and label settings.
+
 ### Multi-Map Generation (v2.1.0+)
 
 Generate multiple adjacent map sheets that share hex edges for seamless tabletop play:

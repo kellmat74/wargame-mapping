@@ -31,79 +31,361 @@ CACHE_DIR = Path(__file__).parent / "cache"
 # Registry file stored in the geofabrik directory
 REGISTRY_FILE = GEOFABRIK_DIR / "regions.json"
 
-# Geofabrik base URLs by continent
+# Geofabrik base URLs by continent (flat lookup for backward compatibility)
+# This is auto-generated from GEOFABRIK_REGIONS - keep them in sync
 GEOFABRIK_CONTINENTS = {
     # Europe
-    "ukraine": "europe",
-    "poland": "europe",
-    "lithuania": "europe",
-    "latvia": "europe",
-    "estonia": "europe",
-    "germany": "europe",
-    "france": "europe",
-    "spain": "europe",
-    "italy": "europe",
-    "united-kingdom": "europe",
-    "romania": "europe",
-    "belarus": "europe",
-    "moldova": "europe",
-    "hungary": "europe",
-    "czech-republic": "europe",
-    "slovakia": "europe",
-    "austria": "europe",
-    "switzerland": "europe",
-    "netherlands": "europe",
-    "belgium": "europe",
-    "sweden": "europe",
-    "norway": "europe",
-    "finland": "europe",
-    "denmark": "europe",
-    "greece": "europe",
-    "turkey": "europe",
-    "russia": "europe",  # Geofabrik has it under europe
+    "albania": "europe", "andorra": "europe", "austria": "europe", "azores": "europe",
+    "belarus": "europe", "belgium": "europe", "bosnia-herzegovina": "europe",
+    "bulgaria": "europe", "croatia": "europe", "cyprus": "europe", "czech-republic": "europe",
+    "denmark": "europe", "estonia": "europe", "faroe-islands": "europe", "finland": "europe",
+    "france": "europe", "georgia": "europe", "germany": "europe", "great-britain": "europe",
+    "greece": "europe", "guernsey-jersey": "europe", "hungary": "europe", "iceland": "europe",
+    "ireland-and-northern-ireland": "europe", "isle-of-man": "europe", "italy": "europe",
+    "kosovo": "europe", "latvia": "europe", "liechtenstein": "europe", "lithuania": "europe",
+    "luxembourg": "europe", "macedonia": "europe", "malta": "europe", "moldova": "europe",
+    "monaco": "europe", "montenegro": "europe", "netherlands": "europe", "norway": "europe",
+    "poland": "europe", "portugal": "europe", "romania": "europe", "russia": "europe",
+    "serbia": "europe", "slovakia": "europe", "slovenia": "europe", "spain": "europe",
+    "sweden": "europe", "switzerland": "europe", "turkey": "europe", "ukraine": "europe",
+    # North America
+    "us": "north-america", "canada": "north-america", "mexico": "north-america",
+    "greenland": "north-america",
+    # South America
+    "argentina": "south-america", "bolivia": "south-america", "brazil": "south-america",
+    "chile": "south-america", "colombia": "south-america", "ecuador": "south-america",
+    "guyana": "south-america", "paraguay": "south-america", "peru": "south-america",
+    "suriname": "south-america", "uruguay": "south-america", "venezuela": "south-america",
     # Asia
-    "philippines": "asia",
-    "taiwan": "asia",
-    "japan": "asia",
-    "south-korea": "asia",
-    "indonesia": "asia",
-    "malaysia-singapore-brunei": "asia",
-    "vietnam": "asia",
-    "thailand": "asia",
-    "cambodia": "asia",
-    "laos": "asia",
-    "myanmar": "asia",
-    "china": "asia",
-    "india": "asia",
-    "bangladesh": "asia",
-    "pakistan": "asia",
-    "iran": "asia",
-    "iraq": "asia",
-    "syria": "asia",
+    "afghanistan": "asia", "armenia": "asia", "azerbaijan": "asia", "bangladesh": "asia",
+    "bhutan": "asia", "cambodia": "asia", "china": "asia", "east-timor": "asia",
+    "gcc-states": "asia", "india": "asia", "indonesia": "asia", "iran": "asia",
+    "iraq": "asia", "israel-and-palestine": "asia", "japan": "asia", "jordan": "asia",
+    "kazakhstan": "asia", "kyrgyzstan": "asia", "laos": "asia", "lebanon": "asia",
+    "malaysia-singapore-brunei": "asia", "maldives": "asia", "mongolia": "asia",
+    "myanmar": "asia", "nepal": "asia", "north-korea": "asia", "pakistan": "asia",
+    "philippines": "asia", "south-korea": "asia", "sri-lanka": "asia", "syria": "asia",
+    "taiwan": "asia", "tajikistan": "asia", "thailand": "asia", "turkmenistan": "asia",
+    "uzbekistan": "asia", "vietnam": "asia", "yemen": "asia",
     # Africa
-    "egypt": "africa",
-    "south-africa": "africa",
-    "morocco": "africa",
-    "algeria": "africa",
-    "libya": "africa",
-    "ethiopia": "africa",
-    "kenya": "africa",
-    "nigeria": "africa",
-    # Americas
-    "us-midwest": "north-america",
-    "us-northeast": "north-america",
-    "us-south": "north-america",
-    "us-west": "north-america",
-    "canada": "north-america",
-    "mexico": "north-america",
-    "brazil": "south-america",
-    "argentina": "south-america",
-    "colombia": "south-america",
-    "peru": "south-america",
-    "chile": "south-america",
+    "algeria": "africa", "angola": "africa", "benin": "africa", "botswana": "africa",
+    "burkina-faso": "africa", "burundi": "africa", "cameroon": "africa",
+    "canary-islands": "africa", "cape-verde": "africa", "central-african-republic": "africa",
+    "chad": "africa", "comores": "africa", "congo-brazzaville": "africa",
+    "congo-democratic-republic": "africa", "djibouti": "africa", "egypt": "africa",
+    "equatorial-guinea": "africa", "eritrea": "africa", "ethiopia": "africa",
+    "gabon": "africa", "ghana": "africa", "guinea": "africa", "guinea-bissau": "africa",
+    "ivory-coast": "africa", "kenya": "africa", "lesotho": "africa", "liberia": "africa",
+    "libya": "africa", "madagascar": "africa", "malawi": "africa", "mali": "africa",
+    "mauritania": "africa", "mauritius": "africa", "morocco": "africa",
+    "mozambique": "africa", "namibia": "africa", "niger": "africa", "nigeria": "africa",
+    "rwanda": "africa", "saint-helena-ascension-and-tristan-da-cunha": "africa",
+    "sao-tome-and-principe": "africa", "senegal-and-gambia": "africa", "seychelles": "africa",
+    "sierra-leone": "africa", "somalia": "africa", "south-africa": "africa",
+    "south-sudan": "africa", "sudan": "africa", "swaziland": "africa", "tanzania": "africa",
+    "togo": "africa", "tunisia": "africa", "uganda": "africa", "zambia": "africa",
+    "zimbabwe": "africa",
     # Oceania
-    "australia": "australia-oceania",
-    "new-zealand": "australia-oceania",
+    "american-oceania": "australia-oceania", "australia": "australia-oceania",
+    "cook-islands": "australia-oceania", "fiji": "australia-oceania",
+    "ile-de-clipperton": "australia-oceania", "kiribati": "australia-oceania",
+    "marshall-islands": "australia-oceania", "micronesia": "australia-oceania",
+    "nauru": "australia-oceania", "new-caledonia": "australia-oceania",
+    "new-zealand": "australia-oceania", "niue": "australia-oceania",
+    "palau": "australia-oceania", "papua-new-guinea": "australia-oceania",
+    "pitcairn-islands": "australia-oceania", "polynesie-francaise": "australia-oceania",
+    "samoa": "australia-oceania", "solomon-islands": "australia-oceania",
+    "tokelau": "australia-oceania", "tonga": "australia-oceania",
+    "tuvalu": "australia-oceania", "vanuatu": "australia-oceania",
+    "wallis-et-futuna": "australia-oceania",
+}
+
+# Hierarchical region structure with subregions
+# Format: continent -> country -> {subregions: [...]} or {} if no subregions
+# Complete list from https://download.geofabrik.de/
+GEOFABRIK_REGIONS = {
+    "europe": {
+        # Countries with subregions
+        "germany": {
+            "subregions": [
+                "baden-wuerttemberg", "bayern", "berlin", "brandenburg", "bremen",
+                "hamburg", "hessen", "mecklenburg-vorpommern", "niedersachsen",
+                "nordrhein-westfalen", "rheinland-pfalz", "saarland", "sachsen",
+                "sachsen-anhalt", "schleswig-holstein", "thueringen"
+            ]
+        },
+        "france": {
+            "subregions": [
+                "alsace", "aquitaine", "auvergne", "basse-normandie", "bourgogne",
+                "bretagne", "centre", "champagne-ardenne", "corse", "franche-comte",
+                "haute-normandie", "ile-de-france", "languedoc-roussillon", "limousin",
+                "lorraine", "midi-pyrenees", "nord-pas-de-calais", "pays-de-la-loire",
+                "picardie", "poitou-charentes", "provence-alpes-cote-d-azur", "rhone-alpes"
+            ]
+        },
+        "italy": {
+            "subregions": [
+                "centro", "isole", "nord-est", "nord-ovest", "sud"
+            ]
+        },
+        "poland": {
+            "subregions": [
+                "dolnoslaskie", "kujawsko-pomorskie", "lodzkie", "lubelskie",
+                "lubuskie", "malopolskie", "mazowieckie", "opolskie", "podkarpackie",
+                "podlaskie", "pomorskie", "slaskie", "swietokrzyskie",
+                "warminsko-mazurskie", "wielkopolskie", "zachodniopomorskie"
+            ]
+        },
+        "great-britain": {
+            "subregions": [
+                "england", "scotland", "wales"
+            ]
+        },
+        "russia": {
+            "subregions": [
+                "central-fed-district", "crimean-fed-district", "far-eastern-fed-district",
+                "kaliningrad", "north-caucasus-fed-district", "northwestern-fed-district",
+                "siberian-fed-district", "south-fed-district", "ural-fed-district",
+                "volga-fed-district"
+            ]
+        },
+        # Countries without subregions (complete list from Geofabrik)
+        "albania": {},
+        "andorra": {},
+        "austria": {},
+        "azores": {},
+        "belarus": {},
+        "belgium": {},
+        "bosnia-herzegovina": {},
+        "bulgaria": {},
+        "croatia": {},
+        "cyprus": {},
+        "czech-republic": {},
+        "denmark": {},
+        "estonia": {},
+        "faroe-islands": {},
+        "finland": {},
+        "georgia": {},
+        "greece": {},
+        "guernsey-jersey": {},
+        "hungary": {},
+        "iceland": {},
+        "ireland-and-northern-ireland": {},
+        "isle-of-man": {},
+        "kosovo": {},
+        "latvia": {},
+        "liechtenstein": {},
+        "lithuania": {},
+        "luxembourg": {},
+        "macedonia": {},
+        "malta": {},
+        "moldova": {},
+        "monaco": {},
+        "montenegro": {},
+        "netherlands": {},
+        "norway": {},
+        "portugal": {},
+        "romania": {},
+        "serbia": {},
+        "slovakia": {},
+        "slovenia": {},
+        "spain": {},
+        "sweden": {},
+        "switzerland": {},
+        "turkey": {},
+        "ukraine": {},
+    },
+    "north-america": {
+        "us": {
+            "subregions": [
+                "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+                "connecticut", "delaware", "district-of-columbia", "florida", "georgia",
+                "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky",
+                "louisiana", "maine", "maryland", "massachusetts", "michigan", "minnesota",
+                "mississippi", "missouri", "montana", "nebraska", "nevada", "new-hampshire",
+                "new-jersey", "new-mexico", "new-york", "north-carolina", "north-dakota",
+                "ohio", "oklahoma", "oregon", "pennsylvania", "puerto-rico", "rhode-island",
+                "south-carolina", "south-dakota", "tennessee", "texas", "us-virgin-islands",
+                "utah", "vermont", "virginia", "washington", "west-virginia", "wisconsin", "wyoming"
+            ]
+        },
+        "canada": {
+            "subregions": [
+                "alberta", "british-columbia", "manitoba", "new-brunswick",
+                "newfoundland-and-labrador", "northwest-territories", "nova-scotia",
+                "nunavut", "ontario", "prince-edward-island", "quebec", "saskatchewan", "yukon"
+            ]
+        },
+        "mexico": {},
+        "greenland": {},
+    },
+    "south-america": {
+        "brazil": {
+            "subregions": [
+                "centro-oeste", "nordeste", "norte", "sudeste", "sul"
+            ]
+        },
+        # All South American countries
+        "argentina": {},
+        "bolivia": {},
+        "chile": {},
+        "colombia": {},
+        "ecuador": {},
+        "guyana": {},
+        "paraguay": {},
+        "peru": {},
+        "suriname": {},
+        "uruguay": {},
+        "venezuela": {},
+    },
+    "asia": {
+        "japan": {
+            "subregions": [
+                "chubu", "chugoku", "hokkaido", "kansai", "kanto", "kyushu", "shikoku", "tohoku"
+            ]
+        },
+        "india": {
+            "subregions": [
+                "central-zone", "eastern-zone", "north-eastern-zone", "northern-zone",
+                "southern-zone", "western-zone"
+            ]
+        },
+        "indonesia": {
+            "subregions": [
+                "java", "kalimantan", "maluku-and-papua", "nusa-tenggara", "sulawesi", "sumatra"
+            ]
+        },
+        # All Asian countries (complete list from Geofabrik)
+        "afghanistan": {},
+        "armenia": {},
+        "azerbaijan": {},
+        "bangladesh": {},
+        "bhutan": {},
+        "cambodia": {},
+        "china": {},
+        "east-timor": {},
+        "gcc-states": {},
+        "iran": {},
+        "iraq": {},
+        "israel-and-palestine": {},
+        "jordan": {},
+        "kazakhstan": {},
+        "kyrgyzstan": {},
+        "laos": {},
+        "lebanon": {},
+        "malaysia-singapore-brunei": {},
+        "maldives": {},
+        "mongolia": {},
+        "myanmar": {},
+        "nepal": {},
+        "north-korea": {},
+        "pakistan": {},
+        "philippines": {},
+        "south-korea": {},
+        "sri-lanka": {},
+        "syria": {},
+        "taiwan": {},
+        "tajikistan": {},
+        "thailand": {},
+        "turkmenistan": {},
+        "uzbekistan": {},
+        "vietnam": {},
+        "yemen": {},
+    },
+    "africa": {
+        "south-africa": {
+            "subregions": [
+                "eastern-cape", "free-state", "gauteng", "kwazulu-natal", "limpopo",
+                "mpumalanga", "north-west", "northern-cape", "western-cape"
+            ]
+        },
+        # All African countries (complete list from Geofabrik)
+        "algeria": {},
+        "angola": {},
+        "benin": {},
+        "botswana": {},
+        "burkina-faso": {},
+        "burundi": {},
+        "cameroon": {},
+        "canary-islands": {},
+        "cape-verde": {},
+        "central-african-republic": {},
+        "chad": {},
+        "comores": {},
+        "congo-brazzaville": {},
+        "congo-democratic-republic": {},
+        "djibouti": {},
+        "egypt": {},
+        "equatorial-guinea": {},
+        "eritrea": {},
+        "ethiopia": {},
+        "gabon": {},
+        "ghana": {},
+        "guinea": {},
+        "guinea-bissau": {},
+        "ivory-coast": {},
+        "kenya": {},
+        "lesotho": {},
+        "liberia": {},
+        "libya": {},
+        "madagascar": {},
+        "malawi": {},
+        "mali": {},
+        "mauritania": {},
+        "mauritius": {},
+        "morocco": {},
+        "mozambique": {},
+        "namibia": {},
+        "niger": {},
+        "nigeria": {},
+        "rwanda": {},
+        "saint-helena-ascension-and-tristan-da-cunha": {},
+        "sao-tome-and-principe": {},
+        "senegal-and-gambia": {},
+        "seychelles": {},
+        "sierra-leone": {},
+        "somalia": {},
+        "south-sudan": {},
+        "sudan": {},
+        "swaziland": {},
+        "tanzania": {},
+        "togo": {},
+        "tunisia": {},
+        "uganda": {},
+        "zambia": {},
+        "zimbabwe": {},
+    },
+    "australia-oceania": {
+        "australia": {
+            "subregions": [
+                "australian-capital-territory", "new-south-wales", "northern-territory",
+                "queensland", "south-australia", "tasmania", "victoria", "western-australia"
+            ]
+        },
+        # All Oceania countries (complete list from Geofabrik)
+        "american-oceania": {},
+        "cook-islands": {},
+        "fiji": {},
+        "ile-de-clipperton": {},
+        "kiribati": {},
+        "marshall-islands": {},
+        "micronesia": {},
+        "nauru": {},
+        "new-caledonia": {},
+        "new-zealand": {},
+        "niue": {},
+        "palau": {},
+        "papua-new-guinea": {},
+        "pitcairn-islands": {},
+        "polynesie-francaise": {},
+        "samoa": {},
+        "solomon-islands": {},
+        "tokelau": {},
+        "tonga": {},
+        "tuvalu": {},
+        "vanuatu": {},
+        "wallis-et-futuna": {},
+    },
 }
 
 
@@ -169,10 +451,97 @@ def derive_display_name(region_name: str) -> str:
     return region_name.replace("-", " ").title()
 
 
-def get_geofabrik_url(region_name: str) -> str:
-    """Get the Geofabrik download URL for a region."""
-    continent = GEOFABRIK_CONTINENTS.get(region_name, "asia")  # Default to asia
+def get_geofabrik_url(region_name: str, continent: str = None, country: str = None) -> str:
+    """Get the Geofabrik download URL for a region.
+
+    Args:
+        region_name: The region/subregion name (e.g., 'california', 'ukraine')
+        continent: Optional continent for subregion URLs (e.g., 'north-america')
+        country: Optional country for subregion URLs (e.g., 'us')
+
+    Returns:
+        Full Geofabrik download URL
+
+    Examples:
+        get_geofabrik_url('ukraine') -> .../europe/ukraine-latest.osm.pbf
+        get_geofabrik_url('california', 'north-america', 'us') -> .../north-america/us/california-latest.osm.pbf
+    """
+    # If continent and country provided, this is a subregion
+    if continent and country:
+        return f"https://download.geofabrik.de/{continent}/{country}/{region_name}-latest.osm.pbf"
+
+    # Check if it's a known country in the new hierarchy
+    for cont_name, countries in GEOFABRIK_REGIONS.items():
+        if region_name in countries:
+            return f"https://download.geofabrik.de/{cont_name}/{region_name}-latest.osm.pbf"
+
+    # Fall back to old GEOFABRIK_CONTINENTS lookup
+    continent = GEOFABRIK_CONTINENTS.get(region_name, "asia")
     return f"https://download.geofabrik.de/{continent}/{region_name}-latest.osm.pbf"
+
+
+def get_regions_by_continent() -> Dict[str, dict]:
+    """
+    Return regions grouped by continent for UI dropdowns.
+
+    Returns hierarchical dict:
+    {
+        "continent_name": {
+            "display_name": "Continent Name",
+            "countries": {
+                "country_name": {
+                    "display_name": "Country Name",
+                    "subregions": [
+                        {"name": "subregion", "display_name": "Subregion"},
+                        ...
+                    ]  # Empty list if no subregions
+                }
+            }
+        }
+    }
+    """
+    continent_display = {
+        "europe": "Europe",
+        "asia": "Asia",
+        "africa": "Africa",
+        "north-america": "North America",
+        "south-america": "South America",
+        "australia-oceania": "Oceania",
+    }
+
+    # Build hierarchical structure from GEOFABRIK_REGIONS
+    result = {}
+    continent_order = ["europe", "north-america", "asia", "south-america", "africa", "australia-oceania"]
+
+    for continent in continent_order:
+        if continent not in GEOFABRIK_REGIONS:
+            continue
+
+        countries_data = {}
+        for country_name, country_info in GEOFABRIK_REGIONS[continent].items():
+            subregions = country_info.get("subregions", [])
+            subregion_list = [
+                {"name": sr, "display_name": derive_display_name(sr)}
+                for sr in sorted(subregions, key=lambda x: derive_display_name(x))
+            ]
+
+            countries_data[country_name] = {
+                "display_name": derive_display_name(country_name),
+                "subregions": subregion_list,
+            }
+
+        # Sort countries by display name
+        sorted_countries = dict(sorted(
+            countries_data.items(),
+            key=lambda x: x[1]["display_name"]
+        ))
+
+        result[continent] = {
+            "display_name": continent_display.get(continent, continent.title()),
+            "countries": sorted_countries,
+        }
+
+    return result
 
 
 def scan_pbf_directories() -> Dict[str, dict]:

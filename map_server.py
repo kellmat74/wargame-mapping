@@ -24,7 +24,15 @@ from pathlib import Path
 from flask import Flask, send_file, request, jsonify, Response
 
 # Import region registry for auto-discovery of available PBF files
-from region_registry import detect_region_for_coords, get_available_regions
+from region_registry import (
+    detect_region_for_coords,
+    get_available_regions,
+    get_regions_by_continent,
+    get_geofabrik_url,
+    derive_display_name,
+    GEOFABRIK_DIR,
+    GEOFABRIK_CONTINENTS,
+)
 
 app = Flask(__name__)
 
@@ -855,6 +863,241 @@ def restart_server():
 
     threading.Thread(target=do_restart, daemon=True).start()
     return jsonify({'success': True, 'message': 'Server restarting...'})
+
+
+# === Geofabrik Data Download Routes ===
+
+# Store for Geofabrik download status
+geofabrik_status = {
+    'running': False,
+    'output': [],
+    'error': None,
+    'complete': False,
+    'region': None,
+}
+geofabrik_lock = threading.Lock()
+geofabrik_queue = queue.Queue()
+
+
+@app.route('/data-download')
+def data_download_page():
+    """Serve the data download page."""
+    return send_file('data_download_config.html')
+
+
+@app.route('/api/geofabrik/regions')
+def get_geofabrik_regions():
+    """Get available Geofabrik regions grouped by continent with subregions.
+
+    Returns hierarchical structure:
+    {
+        "continent": {
+            "display_name": "Continent Name",
+            "countries": {
+                "country": {
+                    "display_name": "Country Name",
+                    "subregions": [{"name": "...", "display_name": "..."}]
+                }
+            }
+        }
+    }
+    """
+    try:
+        return jsonify(get_regions_by_continent())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/geofabrik/downloaded')
+def get_downloaded_regions():
+    """Get list of downloaded Geofabrik PBF files with metadata."""
+    try:
+        downloaded = []
+
+        if GEOFABRIK_DIR.exists():
+            for pbf_file in GEOFABRIK_DIR.glob('*-latest.osm.pbf'):
+                region_name = pbf_file.stem.replace('-latest.osm', '')
+                stat = pbf_file.stat()
+
+                # Get continent from registry
+                continent = GEOFABRIK_CONTINENTS.get(region_name, 'unknown')
+
+                downloaded.append({
+                    'name': region_name,
+                    'display_name': derive_display_name(region_name),
+                    'continent': continent,
+                    'size_bytes': stat.st_size,
+                    'size_mb': round(stat.st_size / (1024 * 1024), 1),
+                    'modified': stat.st_mtime,
+                    'path': str(pbf_file),
+                })
+
+        # Sort by display name
+        downloaded.sort(key=lambda x: x['display_name'])
+
+        return jsonify({'downloaded': downloaded})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/geofabrik/download', methods=['POST'])
+def start_geofabrik_download():
+    """Start downloading a Geofabrik region PBF file.
+
+    Request body:
+        region: Region/subregion name (required)
+        continent: Continent name (optional, for subregions)
+        country: Country name (optional, for subregions)
+
+    Examples:
+        {"region": "ukraine"} - Download country
+        {"region": "california", "continent": "north-america", "country": "us"} - Download subregion
+    """
+    global geofabrik_status
+
+    try:
+        data = request.get_json()
+        region = data.get('region')
+        continent = data.get('continent')  # Optional for subregions
+        country = data.get('country')      # Optional for subregions
+
+        if not region:
+            return jsonify({'error': 'No region specified'}), 400
+
+        # Build display name for status
+        display_name = region
+        if country:
+            display_name = f"{country}/{region}"
+
+        # Check if already running
+        with geofabrik_lock:
+            if geofabrik_status['running']:
+                return jsonify({'error': 'Download already in progress'}), 409
+
+            # Reset status
+            geofabrik_status = {
+                'running': True,
+                'output': [],
+                'error': None,
+                'complete': False,
+                'region': region,
+            }
+
+        # Clear the queue
+        while not geofabrik_queue.empty():
+            try:
+                geofabrik_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        # Start download in background thread
+        def run_download():
+            try:
+                import urllib.request
+                import time as time_module
+
+                url = get_geofabrik_url(region, continent, country)
+                GEOFABRIK_DIR.mkdir(parents=True, exist_ok=True)
+                output_path = GEOFABRIK_DIR / f"{region}-latest.osm.pbf"
+
+                geofabrik_queue.put(f"Downloading {display_name} from Geofabrik...")
+                geofabrik_queue.put(f"URL: {url}")
+
+                # Throttled progress reporting to prevent UI freezing
+                last_update_time = [0]  # Use list to allow modification in nested function
+                last_percent = [-1]
+
+                def report_progress(block_num, block_size, total_size):
+                    if total_size <= 0:
+                        return
+
+                    now = time_module.time()
+                    percent = int(min(100, block_num * block_size * 100 / total_size))
+
+                    # Only update if: 1 second passed OR percent changed by 5+
+                    if now - last_update_time[0] >= 1.0 or percent >= last_percent[0] + 5:
+                        last_update_time[0] = now
+                        last_percent[0] = percent
+                        size_mb = block_num * block_size / (1024 * 1024)
+                        total_mb = total_size / (1024 * 1024)
+                        geofabrik_queue.put(f"Progress: {percent}% ({size_mb:.1f} / {total_mb:.1f} MB)")
+
+                # Use urlretrieve for progress reporting
+                urllib.request.urlretrieve(url, output_path, reporthook=report_progress)
+
+                # Verify file exists and has content
+                if output_path.exists() and output_path.stat().st_size > 0:
+                    size_mb = output_path.stat().st_size / (1024 * 1024)
+                    geofabrik_queue.put(f"Download complete: {size_mb:.1f} MB")
+
+                    # Update region registry
+                    geofabrik_queue.put("Updating region registry...")
+                    get_available_regions(force_rescan=True)
+                    geofabrik_queue.put("Registry updated")
+                else:
+                    raise Exception("Download failed - file is empty or missing")
+
+                with geofabrik_lock:
+                    geofabrik_status['running'] = False
+                    geofabrik_status['complete'] = True
+                geofabrik_queue.put(None)  # Signal completion
+
+            except Exception as e:
+                with geofabrik_lock:
+                    geofabrik_status['running'] = False
+                    geofabrik_status['error'] = str(e)
+                    geofabrik_status['complete'] = True
+                geofabrik_queue.put(None)
+
+        thread = threading.Thread(target=run_download)
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({'success': True, 'message': f'Download started for {region}'})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/geofabrik/progress')
+def geofabrik_progress_stream():
+    """Stream Geofabrik download progress via Server-Sent Events."""
+    def generate():
+        while True:
+            try:
+                line = geofabrik_queue.get(timeout=30)
+                if line is None:
+                    # Download complete
+                    with geofabrik_lock:
+                        if geofabrik_status['error']:
+                            yield f"data: {json.dumps({'type': 'error', 'message': geofabrik_status['error']})}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'type': 'complete', 'message': 'Download complete!'})}\n\n"
+                    break
+                else:
+                    yield f"data: {json.dumps({'type': 'output', 'message': line})}\n\n"
+            except queue.Empty:
+                # Send keepalive
+                yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
+
+                # Check if download is still running
+                with geofabrik_lock:
+                    if not geofabrik_status['running'] and geofabrik_status['complete']:
+                        break
+
+    return Response(generate(), mimetype='text/event-stream')
+
+
+@app.route('/api/geofabrik/status')
+def get_geofabrik_status():
+    """Get current Geofabrik download status."""
+    with geofabrik_lock:
+        return jsonify({
+            'running': geofabrik_status['running'],
+            'complete': geofabrik_status['complete'],
+            'error': geofabrik_status['error'],
+            'region': geofabrik_status['region'],
+        })
 
 
 if __name__ == '__main__':

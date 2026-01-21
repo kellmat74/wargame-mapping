@@ -654,6 +654,7 @@
         <div class="nav-tabs">
             <a href="/" class="nav-tab active">Detailed Map</a>
             <a href="/game-map" class="nav-tab">Game Map Conversion</a>
+            <a href="/data-download" class="nav-tab">Data Download</a>
         </div>
 
         <!-- Instructions -->
@@ -1211,6 +1212,24 @@
         // 100km square row letters (repeats every 2M northing)
         const MGRS_ROW_LETTERS_ODD = 'ABCDEFGHJKLMNPQRSTUV';  // Odd zones
         const MGRS_ROW_LETTERS_EVEN = 'FGHJKLMNPQRSTUVABCDE'; // Even zones
+
+        /**
+         * Normalize longitude to -180 to 180 range.
+         * Leaflet can return out-of-range values when the map wraps around the world.
+         */
+        function normalizeLongitude(lon) {
+            while (lon > 180) lon -= 360;
+            while (lon < -180) lon += 360;
+            return lon;
+        }
+
+        /**
+         * Clamp latitude to valid -90 to 90 range.
+         * Unlike longitude, latitude doesn't wrap - values outside this range are invalid.
+         */
+        function clampLatitude(lat) {
+            return Math.max(-90, Math.min(90, lat));
+        }
 
         function latLonToUTM(lat, lon) {
             // Simplified UTM conversion
@@ -1804,8 +1823,8 @@
             // Update state - geographic shift
             state.shiftNorth += distance * Math.cos(bearingRad);
             state.shiftEast += distance * Math.sin(bearingRad);
-            state.centerLat += deltaLat;
-            state.centerLon += deltaLon;
+            state.centerLat = clampLatitude(state.centerLat + deltaLat);
+            state.centerLon = normalizeLongitude(state.centerLon + deltaLon);
 
             // Track map-relative shift for notes
             switch(direction) {
@@ -2210,6 +2229,10 @@ config = MapConfig(
 
                 // Apply parsed coordinates
                 if (format && lat !== undefined && lon !== undefined) {
+                    // Normalize coordinates to valid ranges
+                    lat = clampLatitude(lat);
+                    lon = normalizeLongitude(lon);
+
                     state.centerLat = lat;
                     state.centerLon = lon;
                     state.shiftNorth = 0;
@@ -2229,7 +2252,7 @@ config = MapConfig(
 
             // Coordinate inputs - reset shifts when manually changing coordinates
             document.getElementById('centerLat').addEventListener('input', (e) => {
-                state.centerLat = parseFloat(e.target.value) || 0;
+                state.centerLat = clampLatitude(parseFloat(e.target.value) || 0);
                 state.shiftNorth = 0;
                 state.shiftEast = 0;
                 state.mapShiftUp = 0;
@@ -2239,7 +2262,7 @@ config = MapConfig(
             });
 
             document.getElementById('centerLon').addEventListener('input', (e) => {
-                state.centerLon = parseFloat(e.target.value) || 0;
+                state.centerLon = normalizeLongitude(parseFloat(e.target.value) || 0);
                 state.shiftNorth = 0;
                 state.shiftEast = 0;
                 state.mapShiftUp = 0;
@@ -2324,9 +2347,9 @@ config = MapConfig(
         }
 
         function onMapClick(e) {
-            // Update center coordinates
-            state.centerLat = e.latlng.lat;
-            state.centerLon = e.latlng.lng;
+            // Update center coordinates (normalize longitude for wrapped maps)
+            state.centerLat = clampLatitude(e.latlng.lat);
+            state.centerLon = normalizeLongitude(e.latlng.lng);
             state.shiftNorth = 0;
             state.shiftEast = 0;
             state.mapShiftUp = 0;

@@ -50,7 +50,7 @@ TILE_CACHE_DIR = DATA_DIR / "tile_cache"  # Cache for reference tiles
 DEFAULTS_FILE = Path("map_defaults.json")
 
 # === Version ===
-VERSION = "v2.1.6"
+VERSION = "v3.0.0"
 
 
 def load_map_defaults() -> dict:
