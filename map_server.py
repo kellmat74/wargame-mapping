@@ -10,7 +10,7 @@ A simple Flask server that:
 Usage:
     python map_server.py
 
-Then open http://localhost:5000 in your browser.
+Then open http://localhost:8080 in your browser.
 """
 
 import json
@@ -21,6 +21,7 @@ import sys
 import threading
 import queue
 from pathlib import Path
+from typing import Optional
 from flask import Flask, send_file, request, jsonify, Response
 
 # Import region registry for auto-discovery of available PBF files
@@ -35,6 +36,44 @@ from region_registry import (
 )
 
 app = Flask(__name__)
+
+
+def read_generator_version(version_file: Optional[Path] = None) -> str:
+    """Read VERSION constant from tactical_map.py without importing it."""
+    target = version_file or (Path(__file__).parent / "tactical_map.py")
+    try:
+        with open(target) as f:
+            for line in f:
+                if line.startswith("VERSION"):
+                    return line.split("=")[1].strip().strip("\"'")
+    except Exception:
+        pass
+    return "unknown"
+
+
+def resolve_output_map_dir(map_path: str, base_path: Optional[Path] = None) -> Path:
+    """Resolve and validate a rerender source path under output/."""
+    if not map_path:
+        raise ValueError("No map path specified")
+
+    project_root = (base_path or Path(__file__).parent).resolve()
+    output_root = (project_root / "output").resolve()
+    candidate = Path(map_path).expanduser()
+
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+    else:
+        resolved = (project_root / candidate).resolve()
+
+    if resolved == output_root:
+        raise ValueError("Map path must be a map directory inside output/, not output/ itself")
+
+    try:
+        resolved.relative_to(output_root)
+    except ValueError as exc:
+        raise ValueError("Map path must be inside output/") from exc
+
+    return resolved
 
 
 def detect_geofabrik_region(lat: float, lon: float) -> str:
@@ -124,18 +163,7 @@ def save_defaults():
 @app.route('/api/version')
 def get_version():
     """Get the current generator version."""
-    # Read VERSION from tactical_map.py without importing it
-    # (importing triggers pyproj which breaks subprocess forking)
-    try:
-        version_file = Path(__file__).parent / 'tactical_map.py'
-        with open(version_file) as f:
-            for line in f:
-                if line.startswith('VERSION'):
-                    version = line.split('=')[1].strip().strip('"\'')
-                    return jsonify({'version': version})
-        return jsonify({'version': 'unknown'})
-    except Exception as e:
-        return jsonify({'version': 'unknown', 'error': str(e)})
+    return jsonify({'version': read_generator_version()})
 
 
 @app.route('/api/generate', methods=['POST'])
@@ -637,19 +665,7 @@ def rerender_map():
     import re
     import mgrs
 
-    # Read VERSION from tactical_map.py without importing it
-    # (importing triggers pyproj which breaks subprocess forking)
-    version_str = "v1.0.0"  # fallback
-    try:
-        version_file = Path(__file__).parent / 'tactical_map.py'
-        with open(version_file) as f:
-            for line in f:
-                if line.startswith('VERSION'):
-                    # Parse: VERSION = "v1.0.0"
-                    version_str = line.split('=')[1].strip().strip('"\'')
-                    break
-    except:
-        pass
+    version_str = read_generator_version()
 
     with status_lock:
         if generation_status['running']:
@@ -659,10 +675,11 @@ def rerender_map():
         data = request.get_json()
         map_path = data.get('map_path')
 
-        if not map_path:
-            return jsonify({'error': 'No map path specified'}), 400
+        try:
+            map_dir = resolve_output_map_dir(map_path)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
 
-        map_dir = Path(map_path)
         if not map_dir.exists():
             return jsonify({'error': f'Map directory not found: {map_path}'}), 404
 

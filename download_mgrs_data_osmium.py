@@ -25,6 +25,7 @@ import json
 import time
 import subprocess
 import requests
+import urllib3
 from pathlib import Path
 from typing import Tuple, Dict, Optional
 import mgrs
@@ -60,6 +61,9 @@ OPENTOPOGRAPHY_API_KEY = os.environ.get(
     "137877e41e9d540cf80cc3601dc2230a"  # Fallback for backwards compatibility
 )
 OVERPASS_URL = "https://lz4.overpass-api.de/api/interpreter"
+TLS_MODE = os.environ.get("MAPGEN_TLS_VERIFY", "fallback").lower()
+TLS_STRICT = TLS_MODE == "strict"
+_tls_fallback_warned = False
 
 # Grid parameters (from shared config)
 HEX_SIZE_M = _defaults.get("grid", {}).get("hex_size_m", 250)
@@ -157,6 +161,22 @@ OSM_FEATURES = {
         "nwr/power=plant,generator,substation"
     ),
 }
+
+
+def http_request(method: str, url: str, **kwargs):
+    """HTTP request helper with optional TLS fallback for intercepted networks."""
+    global _tls_fallback_warned
+    try:
+        return requests.request(method, url, **kwargs)
+    except requests.exceptions.SSLError:
+        if TLS_STRICT:
+            raise
+        if not _tls_fallback_warned:
+            print("  Warning: TLS validation failed; retrying insecure HTTPS (set MAPGEN_TLS_VERIFY=strict to disable)")
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            _tls_fallback_warned = True
+        kwargs["verify"] = False
+        return requests.request(method, url, **kwargs)
 
 
 def parse_mgrs_square(square_str: str) -> Tuple[str, str]:
@@ -265,7 +285,7 @@ def download_geofabrik_pbf(region: str) -> Path:
     print(f"  Downloading {filename} from Geofabrik...")
     print(f"    URL: {url}")
 
-    response = requests.get(url, stream=True, timeout=3600)
+    response = http_request("GET", url, stream=True, timeout=3600)
     response.raise_for_status()
 
     total_size = int(response.headers.get('content-length', 0))
@@ -395,7 +415,8 @@ def download_coastline_overpass(
     """
 
     try:
-        response = requests.post(
+        response = http_request(
+            "POST",
             OVERPASS_URL,
             data={"data": query},
             timeout=600
@@ -404,7 +425,8 @@ def download_coastline_overpass(
         if response.status_code == 429:
             print("      Rate limited, waiting 60 seconds...")
             time.sleep(60)
-            response = requests.post(
+            response = http_request(
+                "POST",
                 OVERPASS_URL,
                 data={"data": query},
                 timeout=600
@@ -471,7 +493,7 @@ def download_elevation(
     }
 
     try:
-        response = requests.get(url, params=params, timeout=600)
+        response = http_request("GET", url, params=params, timeout=600)
 
         if response.status_code == 200:
             with open(output_file, 'wb') as f:
@@ -541,7 +563,7 @@ def download_reference_tiles(
         for x in range(x_min, x_max + 1):
             url = f"https://tile.opentopomap.org/{zoom}/{x}/{y}.png"
             try:
-                response = requests.get(url, timeout=30, headers={
+                response = http_request("GET", url, timeout=30, headers={
                     'User-Agent': 'WargameMapping/1.0'
                 })
                 if response.status_code == 200:
@@ -722,7 +744,14 @@ def download_mgrs_square_osmium(
 
     # Extract region PBF
     print(f"  Extracting region from {region} PBF...")
-    region_pbf = GEOFABRIK_DIR / f"{gzd}_{square}.osm.pbf"
+    safe_region = region.replace("/", "_").replace("-", "_")
+    region_pbf = GEOFABRIK_DIR / f"{safe_region}_{gzd}_{square}.osm.pbf"
+    legacy_region_pbf = GEOFABRIK_DIR / f"{gzd}_{square}.osm.pbf"
+
+    # Legacy cache files were keyed only by square and could come from the wrong region.
+    # Keep them on disk, but never trust them for current runs.
+    if legacy_region_pbf.exists() and not region_pbf.exists():
+        print(f"    Ignoring legacy cache {legacy_region_pbf.name} (region-agnostic)")
 
     if region_pbf.exists() and not force:
         print(f"    Using cached {region_pbf.name}")

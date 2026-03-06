@@ -10,6 +10,7 @@ Generates US Army military-style maps with:
 
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,8 @@ import numpy as np
 import geopandas as gpd
 import rasterio
 import mgrs
+import requests
+import urllib3
 from rasterio.warp import transform_bounds
 from shapely.geometry import Point, LineString, Polygon, box, MultiLineString
 from shapely.affinity import rotate
@@ -50,7 +53,26 @@ TILE_CACHE_DIR = DATA_DIR / "tile_cache"  # Cache for reference tiles
 DEFAULTS_FILE = Path("map_defaults.json")
 
 # === Version ===
-VERSION = "v3.0.0"
+VERSION = "v3.0.1"
+TLS_MODE = os.environ.get("MAPGEN_TLS_VERIFY", "fallback").lower()
+TLS_STRICT = TLS_MODE == "strict"
+_tls_fallback_warned = False
+
+
+def http_request(method: str, url: str, **kwargs):
+    """HTTP request helper with optional TLS fallback for intercepted networks."""
+    global _tls_fallback_warned
+    try:
+        return requests.request(method, url, **kwargs)
+    except requests.exceptions.SSLError:
+        if TLS_STRICT:
+            raise
+        if not _tls_fallback_warned:
+            print("  Warning: TLS validation failed; retrying insecure HTTPS (set MAPGEN_TLS_VERIFY=strict to disable)")
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            _tls_fallback_warned = True
+        kwargs["verify"] = False
+        return requests.request(method, url, **kwargs)
 
 
 def load_map_defaults() -> dict:
@@ -1575,6 +1597,7 @@ def classify_terrain(
     print("\nClassifying terrain...")
 
     transformer = Transformer.from_crs(GRID_CRS, dem.crs, always_xy=True)
+    dem_band = dem.read(1)
 
     # Build landcover spatial index
     if not landcover.empty:
@@ -1597,7 +1620,7 @@ def classify_terrain(
         try:
             row, col = dem.index(lon, lat)
             if 0 <= row < dem.height and 0 <= col < dem.width:
-                elev = dem.read(1)[row, col]
+                elev = dem_band[row, col]
                 if elev == dem.nodata or elev < -1000:
                     elev = 0
             else:
@@ -1735,6 +1758,7 @@ def generate_game_overlays(
         print(f"  Game overlays - Sampling elevation for {rotation_deg}° rotation...")
         from pyproj import Transformer
         transformer = Transformer.from_crs(grid_crs, dem_crs, always_xy=True)
+        dem_band = dem.read(1)
 
         # Calculate elevation for each hex based on rotated terrain position
         rotated_elevations = {}
@@ -1763,7 +1787,7 @@ def generate_game_overlays(
                 lon, lat = transformer.transform(source_world_x, source_world_y)
                 row, col = dem.index(lon, lat)
                 if 0 <= row < dem.height and 0 <= col < dem.width:
-                    elev = dem.read(1)[row, col]
+                    elev = dem_band[row, col]
                     if elev == dem.nodata or elev < -1000:
                         elev = 0
                 else:
@@ -2412,7 +2436,6 @@ def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15, output
     from io import BytesIO
 
     try:
-        import requests
         from PIL import Image
     except ImportError:
         print("  requests or PIL not available, skipping high-res tiles")
@@ -2536,7 +2559,7 @@ def download_highres_reference_tiles(config: 'MapConfig', zoom: int = 15, output
         for x in range(x_min, x_max + 1):
             url = f"https://tile.opentopomap.org/{zoom}/{x}/{y}.png"
             try:
-                response = requests.get(url, timeout=30, headers={
+                response = http_request("GET", url, timeout=30, headers={
                     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
                     'Accept': 'image/png,image/*',
                 })
@@ -2669,6 +2692,49 @@ def classify_military_terrain(row) -> str:
         return "open"
 
     return "open"
+
+
+def export_svg_to_pdf(svg_path: Path, output_path: Path) -> bool:
+    """Export SVG to PDF using rsvg-convert or cairosvg."""
+    try:
+        subprocess.run(
+            ["rsvg-convert", "-f", "pdf", "-o", str(output_path), str(svg_path)],
+            check=True,
+            capture_output=True,
+        )
+        print(f"  Saved PDF: {output_path}")
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    try:
+        import cairosvg
+
+        cairosvg.svg2pdf(url=str(svg_path), write_to=str(output_path))
+        print(f"  Saved PDF: {output_path}")
+        return True
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"  Warning: CairoSVG PDF export failed: {e}")
+
+    # Fallback: svglib + reportlab (no cairo dependency)
+    try:
+        from svglib.svglib import svg2rlg
+        from reportlab.graphics import renderPDF
+
+        drawing = svg2rlg(str(svg_path))
+        if drawing is None:
+            raise RuntimeError("svg2rlg returned no drawing")
+        renderPDF.drawToFile(drawing, str(output_path))
+        print(f"  Saved PDF: {output_path}")
+        return True
+    except ImportError:
+        print("  Warning: Could not export PDF (install rsvg-convert, cairosvg+cairo, or svglib+reportlab)")
+        return False
+    except Exception as e:
+        print(f"  Warning: svglib/reportlab PDF export failed: {e}")
+        return False
 
 
 def render_tactical_svg(
@@ -2887,39 +2953,14 @@ def render_tactical_svg(
         print("  PIL not available, skipping pattern creation")
         patterns_available = False
 
-    def to_svg(x: float, y: float) -> Tuple[float, float]:
-        """Convert world coordinates (meters) to SVG coordinates.
-
-        SVG Y-axis is inverted (increases downward), so we flip Y.
-        Coordinates are offset to position hex grid within the play area.
-
-        Layout (from edge of document):
-        - data_margin_m: space for reference data (outside print area)
-        - bleed_m: print bleed
-        - play_margin: space between trim edge and hex grid
-        - center_offset: centering within play area
-
-        Note: Vertex extensions are already accounted for in the scaling calculation
-        (hex_grid_width/height include them), so we don't add them as offsets here.
-        The hex centers are offset by the vertex extension so vertices reach the edges.
-        """
-        # X: offset by data margin, bleed, play margin (left), centering, and vertex extension
-        # The vertex extension shifts all hex centers right so leftmost vertex aligns with play area left edge
-        svg_x = (x - config.min_x) + hex_vertex_extend_h + content_offset_m + play_margin_left_m + center_offset_x_m
-        # Y: inverted, offset by data margin, bleed, play margin (top), centering, and vertex extension
-        svg_y = (config.max_y - y) + hex_vertex_extend_v + content_offset_m + play_margin_top_m + center_offset_y_m
-        return (svg_x, svg_y)
-
-    def svg_to_world(svg_x: float, svg_y: float) -> Tuple[float, float]:
-        """Convert SVG coordinates back to world coordinates (meters).
-
-        This is the inverse of to_svg(). Used for rotation-aware elevation sampling.
-        """
-        # Inverse of: svg_x = (x - config.min_x) + offsets
-        x = svg_x - hex_vertex_extend_h - content_offset_m - play_margin_left_m - center_offset_x_m + config.min_x
-        # Inverse of: svg_y = (config.max_y - y) + offsets
-        y = config.max_y - (svg_y - hex_vertex_extend_v - content_offset_m - play_margin_top_m - center_offset_y_m)
-        return (x, y)
+    # Reuse shared coordinate conversion helper instead of local closures.
+    # Offsets account for bleed/data margins plus play-area centering.
+    coordinate_transformer = config.create_coordinate_transformer(
+        svg_offset_x=hex_vertex_extend_h + content_offset_m + play_margin_left_m + center_offset_x_m,
+        svg_offset_y=hex_vertex_extend_v + content_offset_m + play_margin_top_m + center_offset_y_m,
+    )
+    to_svg = coordinate_transformer.utm_to_svg
+    svg_to_world = coordinate_transformer.svg_to_utm
 
     # Create playable area boundary (union of all hex polygons)
     print("  Creating playable area boundary...")
@@ -4941,6 +4982,7 @@ def render_tactical_svg(
     dwg.save()
     save_time = time.time() - save_start
     print(f"  Saved to {output_path} ({save_time:.1f}s)", flush=True)
+    export_svg_to_pdf(output_path, output_path.with_suffix(".pdf"))
 
     return actual_band_interval
 
@@ -5028,7 +5070,6 @@ def download_land_polygons() -> bool:
     Returns:
         True if land polygons are available (already cached or successfully downloaded)
     """
-    import requests
     import zipfile
 
     shapefile_path = LAND_POLYGONS_CACHE / "land_polygons.shp"
@@ -5047,7 +5088,7 @@ def download_land_polygons() -> bool:
     zip_path = LAND_POLYGONS_CACHE.parent / "land-polygons-split-4326.zip"
 
     try:
-        response = requests.get(LAND_POLYGONS_URL, stream=True, timeout=3600)
+        response = http_request("GET", LAND_POLYGONS_URL, stream=True, timeout=3600)
         response.raise_for_status()
 
         total_size = int(response.headers.get('content-length', 0))
@@ -5154,8 +5195,6 @@ def download_coastline_for_region(data_path: Path, bounds_file: Path) -> bool:
     Returns:
         True if download succeeded, False otherwise
     """
-    import requests
-
     OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
     try:
@@ -5182,7 +5221,8 @@ def download_coastline_for_region(data_path: Path, bounds_file: Path) -> bool:
         out body geom;
         """
 
-        response = requests.post(
+        response = http_request(
+            "POST",
             OVERPASS_URL,
             data={"data": query},
             timeout=600
@@ -5267,7 +5307,7 @@ def extract_single_mgrs_square(mgrs_region: str, available_pbfs: list) -> str:
 
     for region, pbf_path in available_pbfs:
         cmd = [
-            "python3", "download_mgrs_data_osmium.py",
+            sys.executable, "download_mgrs_data_osmium.py",
             "--region", region,
             mgrs_square
         ]

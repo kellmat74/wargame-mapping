@@ -16,9 +16,11 @@ Usage:
 """
 
 import sys
+import os
 import json
 import time
 import requests
+import urllib3
 from pathlib import Path
 from typing import Tuple, Dict, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,9 +31,28 @@ import mgrs
 DATA_DIR = Path("data")
 OVERPASS_URL = "https://lz4.overpass-api.de/api/interpreter"
 OPENTOPOGRAPHY_API_KEY = "137877e41e9d540cf80cc3601dc2230a"
+TLS_MODE = os.environ.get("MAPGEN_TLS_VERIFY", "fallback").lower()
+TLS_STRICT = TLS_MODE == "strict"
+_tls_fallback_warned = False
 
 # Delay between Overpass API requests (seconds)
 API_DELAY = 3  # Increased to be gentler on the API
+
+
+def http_request(method: str, url: str, **kwargs):
+    """HTTP request helper with optional TLS fallback for intercepted networks."""
+    global _tls_fallback_warned
+    try:
+        return requests.request(method, url, **kwargs)
+    except requests.exceptions.SSLError:
+        if TLS_STRICT:
+            raise
+        if not _tls_fallback_warned:
+            print("  Warning: TLS validation failed; retrying insecure HTTPS (set MAPGEN_TLS_VERIFY=strict to disable)")
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            _tls_fallback_warned = True
+        kwargs["verify"] = False
+        return requests.request(method, url, **kwargs)
 
 
 def parse_mgrs_square(square_str: str) -> Tuple[str, str]:
@@ -148,7 +169,8 @@ def download_osm_chunk(
     out body geom;
     """
 
-    response = requests.post(
+    response = http_request(
+        "POST",
         OVERPASS_URL,
         data={"data": query},
         timeout=600
@@ -157,7 +179,8 @@ def download_osm_chunk(
     if response.status_code == 429:
         print(f"      Rate limited, waiting 60 seconds...")
         time.sleep(60)
-        response = requests.post(
+        response = http_request(
+            "POST",
             OVERPASS_URL,
             data={"data": query},
             timeout=600
@@ -194,7 +217,8 @@ out count;"""
     time.sleep(API_DELAY)
 
     try:
-        response = requests.post(
+        response = http_request(
+            "POST",
             OVERPASS_URL,
             data={"data": query},
             timeout=300
@@ -203,7 +227,8 @@ out count;"""
         if response.status_code == 429:
             print(f"  Rate limited, waiting 60 seconds...")
             time.sleep(60)
-            response = requests.post(
+            response = http_request(
+                "POST",
                 OVERPASS_URL,
                 data={"data": query},
                 timeout=300
@@ -579,7 +604,7 @@ def download_elevation(
     }
 
     try:
-        response = requests.get(url, params=params, timeout=600)
+        response = http_request("GET", url, params=params, timeout=600)
 
         if response.status_code == 200:
             with open(output_file, 'wb') as f:
@@ -653,7 +678,7 @@ def download_reference_tiles(
         for x in range(x_min, x_max + 1):
             url = f"https://tile.opentopomap.org/{zoom}/{x}/{y}.png"
             try:
-                response = requests.get(url, timeout=30, headers={
+                response = http_request("GET", url, timeout=30, headers={
                     'User-Agent': 'WargameMapping/1.0'
                 })
                 if response.status_code == 200:

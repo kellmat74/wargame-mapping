@@ -986,11 +986,26 @@ def hide_original_hex_labels(tree: ET.ElementTree) -> None:
     """
     root = tree.getroot()
 
+    def mark_hidden(elem: ET.Element) -> None:
+        # Set both flags for compatibility across SVG consumers.
+        style = elem.get('style', '')
+        if style:
+            if 'display:none' not in style.replace(' ', ''):
+                style = f"{style.rstrip(';')};display:none"
+        else:
+            style = 'display:none'
+        elem.set('style', style)
+        elem.set('visibility', 'hidden')
+
     # Find Hex_Labels group
     for elem in root.iter():
         elem_id = elem.get('id', '')
         if elem_id == 'Hex_Labels':
-            elem.set('style', 'display:none')
+            mark_hidden(elem)
+            # Also hide children explicitly for editors that ignore parent style.
+            for child in elem.iter():
+                if child is not elem:
+                    mark_hidden(child)
             break
 
 
@@ -1007,10 +1022,20 @@ def hide_detail_layers(tree: ET.ElementTree) -> None:
     layers_to_hide = ['Paths', 'Powerlines', 'Tree_Rows', 'Barriers', 'Military']
     hidden_count = 0
 
+    def mark_hidden(elem: ET.Element) -> None:
+        style = elem.get('style', '')
+        if style:
+            if 'display:none' not in style.replace(' ', ''):
+                style = f"{style.rstrip(';')};display:none"
+        else:
+            style = 'display:none'
+        elem.set('style', style)
+        elem.set('visibility', 'hidden')
+
     for elem in root.iter():
         elem_id = elem.get('id', '')
         if elem_id in layers_to_hide:
-            elem.set('style', 'display:none')
+            mark_hidden(elem)
             hidden_count += 1
 
     print(f"  Hidden {hidden_count} detail layers: {', '.join(layers_to_hide)}")
@@ -1151,10 +1176,26 @@ def export_pdf(svg_path: Path, output_path: Path) -> bool:
         print(f"  Saved PDF: {output_path}")
         return True
     except ImportError:
-        print("  Warning: Could not export PDF (install rsvg-convert or cairosvg)")
+        pass
+    except Exception as e:
+        print(f"  Warning: CairoSVG PDF export failed: {e}")
+
+    # Fallback: svglib + reportlab (no cairo dependency)
+    try:
+        from svglib.svglib import svg2rlg
+        from reportlab.graphics import renderPDF
+
+        drawing = svg2rlg(str(svg_path))
+        if drawing is None:
+            raise RuntimeError("svg2rlg returned no drawing")
+        renderPDF.drawToFile(drawing, str(output_path))
+        print(f"  Saved PDF: {output_path}")
+        return True
+    except ImportError:
+        print("  Warning: Could not export PDF (install rsvg-convert, cairosvg+cairo, or svglib+reportlab)")
         return False
     except Exception as e:
-        print(f"  Warning: PDF export failed: {e}")
+        print(f"  Warning: svglib/reportlab PDF export failed: {e}")
         return False
 
 
@@ -1438,12 +1479,17 @@ def convert_single_sheet(
     export_svg(tree, svg_output)
 
     png_output = output_dir / f"{map_name}_game.png"
-    export_png(svg_output, png_output)
+    png_ok = export_png(svg_output, png_output)
 
     pdf_output = output_dir / f"{map_name}_game.pdf"
-    export_pdf(svg_output, pdf_output)
+    pdf_ok = export_pdf(svg_output, pdf_output)
 
-    print(f"  Saved: {svg_output.name}, {png_output.name}, {pdf_output.name}")
+    saved_outputs = [svg_output.name]
+    if png_ok:
+        saved_outputs.append(png_output.name)
+    if pdf_ok:
+        saved_outputs.append(pdf_output.name)
+    print(f"  Saved: {', '.join(saved_outputs)}")
 
     return svg_output
 

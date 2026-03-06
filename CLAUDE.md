@@ -151,7 +151,7 @@ output/{country}/{name}/{timestamp}_{version}/
 
 Output folders include version: `{timestamp}_{version}` (e.g., `2026-01-01_15-17_v1.1.0`)
 
-Current version: **v2.1.1** - See `VERSION` constant in `tactical_map.py`
+Current version: **v3.0.1** - See `VERSION` constant in `tactical_map.py`
 
 ## Gathering Context from Previous Sessions
 
