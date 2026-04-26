@@ -2481,17 +2481,66 @@ config = MapConfig(
                 orientationArrow = null;
             }
 
-            // Half dimensions for corner calculation
-            const halfWidth = widthM / 2;
-            const halfHeight = heightM / 2;
+            // Compute actual hex grid boundary polygon as {dx,dy} offsets from sheet center
+            // dx positive = east, dy positive = north (y-up geographic convention)
+            const hexBoundaryPoints = (() => {
+                const R = hexSizeM / Math.sqrt(3);
+                const W = GRID_WIDTH, H = GRID_HEIGHT;
+                const pts = [];
+                let px = null, py = null;
 
-            // Corner offsets in meters (relative to sheet center, unrotated)
-            const sheetCorners = [
-                { dx: -halfWidth, dy: halfHeight },   // Top-left
-                { dx: halfWidth, dy: halfHeight },    // Top-right
-                { dx: halfWidth, dy: -halfHeight },   // Bottom-right
-                { dx: -halfWidth, dy: -halfHeight }   // Bottom-left
-            ];
+                function hexCtr(q, r) {
+                    return [
+                        q * colSpacing + R,
+                        rowSpacing / 2 + r * rowSpacing + (q % 2 === 1 ? rowSpacing / 2 : 0)
+                    ];
+                }
+
+                function add(x, y) {
+                    if (px !== null && Math.abs(x - px) < 1e-6 && Math.abs(y - py) < 1e-6) return;
+                    // Convert bounding-box coords (x right, y down) to sheet-center offsets (dy north = up)
+                    pts.push({ dx: x - widthM / 2, dy: heightM / 2 - y });
+                    px = x; py = y;
+                }
+
+                // TOP edge: left to right
+                for (let q = 0; q < W; q++) {
+                    const [cx, cy] = hexCtr(q, 0);
+                    if (q === 0) add(cx - R / 2, cy - rowSpacing / 2);
+                    add(cx + R / 2, cy - rowSpacing / 2);
+                    if (q < W - 1) {
+                        const [ncx, ncy] = hexCtr(q + 1, 0);
+                        add(ncx - R / 2, ncy - rowSpacing / 2);
+                    }
+                }
+
+                // RIGHT edge: top to bottom (last column)
+                for (let r = 0; r < H; r++) {
+                    const [cx, cy] = hexCtr(W - 1, r);
+                    add(cx + R, cy);
+                    add(cx + R / 2, cy + rowSpacing / 2);
+                }
+
+                // BOTTOM edge: right to left
+                for (let q = W - 1; q >= 0; q--) {
+                    const [cx, cy] = hexCtr(q, H - 1);
+                    add(cx + R / 2, cy + rowSpacing / 2);
+                    add(cx - R / 2, cy + rowSpacing / 2);
+                    if (q > 0) {
+                        const [ncx, ncy] = hexCtr(q - 1, H - 1);
+                        add(ncx + R / 2, ncy + rowSpacing / 2);
+                    }
+                }
+
+                // LEFT edge: bottom to top (first column)
+                for (let r = H - 1; r >= 0; r--) {
+                    const [cx, cy] = hexCtr(0, r);
+                    add(cx - R, cy);
+                    add(cx - R / 2, cy - rowSpacing / 2);
+                }
+
+                return pts;
+            })();
 
             // Rotation angle (for rotating around cluster center)
             const rotationRad = -state.bearingAtTop * Math.PI / 180;
@@ -2513,8 +2562,8 @@ config = MapConfig(
                 // Get the unrotated position for this sheet
                 const unrotatedPos = unrotatedPositions[index] || { dx: 0, dy: 0 };
 
-                // Calculate corners relative to cluster center, then rotate around cluster center
-                const cornerLatLngs = sheetCorners.map(c => {
+                // Map hex boundary polygon to lat/lon, rotated around cluster center
+                const cornerLatLngs = hexBoundaryPoints.map(c => {
                     // Corner position relative to cluster center (unrotated)
                     const cornerDx = unrotatedPos.dx + c.dx;
                     const cornerDy = unrotatedPos.dy + c.dy;
@@ -2570,7 +2619,7 @@ config = MapConfig(
             if (!state.multiMap.enabled || state.multiMap.count === 1) {
                 const arrowLength = 600;
                 const arrowWidth = 400;
-                const arrowOffset = halfHeight - arrowLength - 200;
+                const arrowOffset = (heightM / 2) - arrowLength - 200;
                 const arrowAngleRad = state.bearingAtTop * Math.PI / 180;
 
                 const tipDx = (arrowOffset + arrowLength) * Math.sin(arrowAngleRad);
