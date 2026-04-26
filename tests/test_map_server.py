@@ -4,7 +4,7 @@ import map_server
 
 
 def test_read_generator_version_matches_source():
-    assert map_server.read_generator_version() == "v3.0.0"
+    assert map_server.read_generator_version() == "v3.0.1"
 
 
 def test_resolve_output_map_dir_accepts_output_subdir(tmp_path):

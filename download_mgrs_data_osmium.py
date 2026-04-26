@@ -40,6 +40,28 @@ from region_registry import (
     get_region_display_name,
 )
 
+def get_osmium_path() -> str:
+    """Return the osmium executable path.
+
+    Prefers a platform-specific binary bundled in assets/bin/ (used when
+    running as a PyInstaller app).  Falls back to 'osmium' on PATH.
+    """
+    if getattr(sys, 'frozen', False):
+        base = Path(sys._MEIPASS)
+    else:
+        base = Path(__file__).parent
+
+    candidates = [
+        base / 'assets' / 'bin' / f'osmium-{sys.platform}',
+        base / 'assets' / 'bin' / 'osmium-darwin',  # Mac fallback name
+        base / 'assets' / 'bin' / 'osmium-win.exe',
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    return 'osmium'  # rely on PATH in dev / source installs
+
+
 # === Configuration ===
 DATA_DIR = Path("data")
 GEOFABRIK_DIR = DATA_DIR / "geofabrik"
@@ -254,7 +276,7 @@ def check_osmium_installed() -> bool:
     """Check if osmium is installed and accessible."""
     try:
         result = subprocess.run(
-            ["osmium", "--version"],
+            [get_osmium_path(), "--version"],
             capture_output=True,
             text=True
         )
@@ -318,7 +340,7 @@ def extract_region_pbf(
     bbox = f"{min_lon},{min_lat},{max_lon},{max_lat}"
 
     cmd = [
-        "osmium", "extract",
+        get_osmium_path(), "extract",
         f"--bbox={bbox}",
         str(source_pbf),
         "-o", str(output_pbf),
@@ -360,7 +382,7 @@ def filter_and_export_features(
         filters = tag_filter.split()
 
         # Run osmium tags-filter
-        cmd = ["osmium", "tags-filter", str(source_pbf)] + filters + [
+        cmd = [get_osmium_path(), "tags-filter", str(source_pbf)] + filters + [
             "-o", str(filtered_pbf),
             "--overwrite"
         ]
@@ -372,7 +394,7 @@ def filter_and_export_features(
 
         # Export to GeoJSON with OSM IDs (all geometry types)
         cmd = [
-            "osmium", "export",
+            get_osmium_path(), "export",
             str(filtered_pbf),
             "--add-unique-id=type_id",
             "-o", str(output_geojson),
@@ -686,24 +708,10 @@ def download_mgrs_square_osmium(
     print(f"Using Geofabrik region: {region}")
     print(f"{'='*60}")
 
-    # Get bounds - prefer map config bounds if available
+    # Use MGRS square bounds directly — the square fully covers the area needed
     print("\nCalculating bounds...")
-    config_path = Path(__file__).parent / "map_config.json"
-    map_bounds = get_map_config_bounds(config_path)
-    mgrs_bounds = get_mgrs_square_bounds(gzd, square)
-
-    if map_bounds:
-        # Use the union of map bounds and MGRS bounds to ensure full coverage
-        bounds = (
-            min(map_bounds[0], mgrs_bounds[0]),
-            min(map_bounds[1], mgrs_bounds[1]),
-            max(map_bounds[2], mgrs_bounds[2]),
-            max(map_bounds[3], mgrs_bounds[3])
-        )
-        print(f"  Using expanded bounds from map_config.json")
-    else:
-        bounds = mgrs_bounds
-        print(f"  Using MGRS square bounds")
+    bounds = get_mgrs_square_bounds(gzd, square)
+    mgrs_bounds = bounds
 
     min_lon, min_lat, max_lon, max_lat = bounds
     print(f"  SW: {min_lat:.4f}N, {min_lon:.4f}E")
@@ -762,7 +770,7 @@ def download_mgrs_square_osmium(
 
         # Get file info
         result = subprocess.run(
-            ["osmium", "fileinfo", "-e", str(region_pbf)],
+            [get_osmium_path(), "fileinfo", "-e", str(region_pbf)],
             capture_output=True,
             text=True
         )

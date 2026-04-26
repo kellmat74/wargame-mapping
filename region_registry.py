@@ -436,6 +436,8 @@ def derive_display_name(region_name: str) -> str:
     """Convert region filename to display name."""
     # Handle special cases
     special_names = {
+        "us": "US",
+        "gcc-states": "GCC States",
         "malaysia-singapore-brunei": "Malaysia",
         "south-korea": "South Korea",
         "united-kingdom": "United Kingdom",
@@ -449,6 +451,41 @@ def derive_display_name(region_name: str) -> str:
 
     # Default: capitalize and replace hyphens with spaces
     return region_name.replace("-", " ").title()
+
+
+_CONTINENT_DISPLAY = {
+    "europe": "Europe",
+    "asia": "Asia",
+    "africa": "Africa",
+    "north-america": "North America",
+    "south-america": "South America",
+    "australia-oceania": "Australia-Oceania",
+    "antarctica": "Antarctica",
+}
+
+
+def get_region_output_path_segments(region_name: str) -> list:
+    """Return ordered display-name path segments for a Geofabrik region.
+
+    Examples:
+        "hessen"     -> ["Europe", "Germany", "Hessen"]
+        "ukraine"    -> ["Europe", "Ukraine"]
+        "california" -> ["North America", "US", "California"]
+        "japan"      -> ["Asia", "Japan"]
+        unknown      -> [derive_display_name(region_name)]
+    """
+    if not region_name:
+        return []
+
+    for cont_key, countries in GEOFABRIK_REGIONS.items():
+        cont_display = _CONTINENT_DISPLAY.get(cont_key, cont_key.replace("-", " ").title())
+        for country_key, country_info in countries.items():
+            if region_name == country_key:
+                return [cont_display, derive_display_name(country_key)]
+            if region_name in country_info.get("subregions", []):
+                return [cont_display, derive_display_name(country_key), derive_display_name(region_name)]
+
+    return [derive_display_name(region_name)]
 
 
 def get_geofabrik_url(region_name: str, continent: str = None, country: str = None) -> str:
@@ -475,8 +512,17 @@ def get_geofabrik_url(region_name: str, continent: str = None, country: str = No
         if region_name in countries:
             return f"https://download.geofabrik.de/{cont_name}/{region_name}-latest.osm.pbf"
 
-    # Fall back to old GEOFABRIK_CONTINENTS lookup
-    continent = GEOFABRIK_CONTINENTS.get(region_name, "asia")
+    # Check if it's a subregion nested under a country
+    for cont_name, countries in GEOFABRIK_REGIONS.items():
+        for country_name, country_info in countries.items():
+            if region_name in country_info.get("subregions", []):
+                return f"https://download.geofabrik.de/{cont_name}/{country_name}/{region_name}-latest.osm.pbf"
+
+    # Fall back to old GEOFABRIK_CONTINENTS lookup; warn if neither found
+    continent = GEOFABRIK_CONTINENTS.get(region_name)
+    if continent is None:
+        print(f"  Warning: unknown continent for region '{region_name}', URL may be wrong")
+        continent = "europe"
     return f"https://download.geofabrik.de/{continent}/{region_name}-latest.osm.pbf"
 
 
@@ -681,16 +727,24 @@ def detect_region_for_coords(lat: float, lon: float) -> Optional[str]:
     """
     Detect which available region contains the given coordinates.
 
+    Returns the most geographically specific (smallest bounding box) match,
+    so a subregion like "hessen" beats a large country like "germany".
     Returns region name or None if not found.
     """
     regions = get_available_regions()
 
+    matches = []
     for region_name, info in regions.items():
         min_lon, min_lat, max_lon, max_lat = info["bounds"]
         if min_lon <= lon <= max_lon and min_lat <= lat <= max_lat:
-            return region_name
+            area = (max_lon - min_lon) * (max_lat - min_lat)
+            matches.append((area, region_name))
 
-    return None
+    if not matches:
+        return None
+
+    matches.sort()
+    return matches[0][1]
 
 
 def get_region_url(region_name: str) -> Optional[str]:

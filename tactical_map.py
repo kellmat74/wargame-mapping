@@ -34,7 +34,7 @@ from pyproj import Transformer, CRS
 import svgwrite
 
 # Local utilities - region registry for auto-discovery of available PBF files
-from region_registry import get_region_display_name
+from region_registry import get_region_display_name, detect_region_for_coords, get_region_output_path_segments
 
 # Local utilities
 from map_utils import Bounds, RotationConfig, CoordinateTransformer, LayerManager, LayerZOrder
@@ -404,7 +404,8 @@ class MapConfig:
     center_lat: float
     center_lon: float
     region: str  # e.g., "51R/TG" or "51R TG" - determines which data folder to use
-    country: str = ""  # e.g., "Japan", "Taiwan", "Philippines" - for output folder organization
+    country: str = ""  # e.g., "Japan", "Taiwan", "Philippines" - display name for JSON / UI
+    geofabrik_region: str = ""  # raw Geofabrik key e.g. "hessen", "japan" - for output path hierarchy
     rotation_deg: float = 0  # Map rotation in degrees (positive = clockwise)
     timestamp: str = ""  # Version timestamp for output folder (YYYY-MM-DD_HH-MM)
     elevation_band_interval: str = "auto"  # Meters per band, or "auto" for automatic calculation
@@ -572,9 +573,13 @@ class MapConfig:
     @property
     def output_path(self) -> Path:
         """Output path includes timestamp for versioned folders."""
-        if self.country:
-            return OUTPUT_DIR / self.country / self.name / self.timestamp
-        return OUTPUT_DIR / self.name / self.timestamp
+        segments = get_region_output_path_segments(self.geofabrik_region) if self.geofabrik_region else (
+            [self.country] if self.country else []
+        )
+        base = OUTPUT_DIR
+        for seg in segments:
+            base = base / seg
+        return base / self.name / self.timestamp
 
     @property
     def map_bounds(self) -> Bounds:
@@ -1083,8 +1088,9 @@ def generate_single_sheet(
     if data_missing:
         print(f"Data not found for {config.region}, attempting to extract...")
         extracted_country = auto_extract_mgrs_data(config)
-        if extracted_country and not config.country:
-            config.country = extracted_country
+        if extracted_country and not config.geofabrik_region:
+            config.geofabrik_region = extracted_country
+            config.country = get_region_display_name(extracted_country)
         # Re-check
         if not dem_path.exists():
             print(f"ERROR: Could not get data for {config.region}")
@@ -1102,8 +1108,9 @@ def generate_single_sheet(
         if available_pbfs:
             for sq in missing_squares:
                 result = extract_single_mgrs_square(sq, available_pbfs)
-                if result and not config.country:
-                    config.country = result
+                if result and not config.geofabrik_region:
+                    config.geofabrik_region = result
+                    config.country = get_region_display_name(result)
 
     # Create hex grid
     grid = TacticalHexGrid(config)
@@ -1248,16 +1255,18 @@ def generate_single_sheet(
     return svg_path
 
 
-def get_mgrs_squares_for_bounds(data_bounds: Bounds, grid_crs: str = GRID_CRS) -> List[str]:
+def get_mgrs_squares_for_bounds(data_bounds: Bounds, grid_crs: str = None) -> List[str]:
     """Get all MGRS 100km squares that cover the given data bounds.
 
     Args:
         data_bounds: Bounds object with UTM coordinates
-        grid_crs: The CRS of the bounds (default: GRID_CRS)
+        grid_crs: The CRS of the bounds (default: current GRID_CRS global)
 
     Returns:
         List of MGRS square strings like ["51R/VH", "51R/WH"]
     """
+    if grid_crs is None:
+        grid_crs = GRID_CRS
     m = mgrs.MGRS()
     transformer = Transformer.from_crs(grid_crs, WGS84, always_xy=True)
 
@@ -1467,11 +1476,9 @@ def load_geojson_from_all_squares(
 
         if file_path:
             try:
-                # Use bbox filtering for GeoPackage files (much faster with spatial index)
-                if file_path.suffix == '.gpkg':
-                    gdf = gpd.read_file(file_path, bbox=bbox, on_invalid="ignore")
-                else:
-                    gdf = gpd.read_file(file_path, on_invalid="ignore")
+                # Use bbox filtering for all formats — pyogrio streams GeoJSON spatially
+                # too, so this avoids loading the full 100km² square into memory.
+                gdf = gpd.read_file(file_path, bbox=bbox, on_invalid="ignore")
                 if not gdf.empty:
                     gdfs.append(gdf)
             except Exception as e:
@@ -5296,16 +5303,29 @@ def extract_single_mgrs_square(mgrs_region: str, available_pbfs: list) -> str:
                 print(f"  {mgrs_region}: Downloading missing coastline data from OSM...")
                 download_coastline_for_region(data_path, bounds_file)
 
-        # Try to get country from bounds.json
+        # Try to get region key from bounds.json
         bounds_file = data_path / "bounds.json"
         if bounds_file.exists():
             with open(bounds_file) as f:
                 bounds_data = json.load(f)
-                geofabrik_region = bounds_data.get("source", {}).get("region", "")
-                return get_region_display_name(geofabrik_region)
+                return bounds_data.get("source", {}).get("region", "")
         return ""
 
-    for region, pbf_path in available_pbfs:
+    # Detect the correct Geofabrik region for this MGRS square by geography
+    detected_region = None
+    try:
+        m = mgrs.MGRS()
+        center_lat, center_lon = m.toLatLon(f"{gzd}{square}5050")
+        detected_region = detect_region_for_coords(center_lat, center_lon)
+    except Exception:
+        pass
+
+    if detected_region:
+        regions_to_try = [(detected_region, None)]
+    else:
+        regions_to_try = available_pbfs
+
+    for region, pbf_path in regions_to_try:
         cmd = [
             sys.executable, "download_mgrs_data_osmium.py",
             "--region", region,
@@ -5321,9 +5341,8 @@ def extract_single_mgrs_square(mgrs_region: str, available_pbfs: list) -> str:
             )
 
             if data_path.exists() and (data_path / "elevation.tif").exists():
-                country = get_region_display_name(region)
                 print(f"  {mgrs_region}: Extracted from {region}")
-                return country
+                return region
             else:
                 if "Error extracting region" in result.stderr or "0 features" in result.stdout:
                     continue
@@ -5423,14 +5442,15 @@ def main():
     dem_path = config.data_path / "elevation.tif"
     data_missing = not config.data_path.exists() or not dem_path.exists()
 
-    # If data exists but country not set, infer from bounds.json
-    if not data_missing and not config.country:
+    # If data exists but region not set, infer from bounds.json
+    if not data_missing and not config.geofabrik_region:
         bounds_file = config.data_path / "bounds.json"
         if bounds_file.exists():
             with open(bounds_file) as f:
                 bounds_data = json.load(f)
                 geofabrik_region = bounds_data.get("source", {}).get("region", "")
                 if geofabrik_region:
+                    config.geofabrik_region = geofabrik_region
                     config.country = get_region_display_name(geofabrik_region)
                     print(f"Inferred country from data: {config.country}")
 
@@ -5440,7 +5460,8 @@ def main():
         # Try to auto-extract from available country PBFs
         extracted_country = auto_extract_mgrs_data(config)
         if extracted_country:
-            config.country = extracted_country
+            config.geofabrik_region = extracted_country
+            config.country = get_region_display_name(extracted_country)
             print(f"Data extraction complete! Country: {config.country}")
         else:
             # No country PBF available - show error
@@ -5486,8 +5507,9 @@ def main():
             if available_pbfs:
                 for sq in missing_squares:
                     result = extract_single_mgrs_square(sq, available_pbfs)
-                    if result and not config.country:
-                        config.country = result
+                    if result and not config.geofabrik_region:
+                        config.geofabrik_region = result
+                        config.country = get_region_display_name(result)
 
     # Create output directory
     config.output_path.mkdir(parents=True, exist_ok=True)

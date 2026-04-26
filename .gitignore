@@ -21,6 +21,11 @@ Thumbs.db
 *.swp
 *.swo
 
+# PyInstaller build artifacts
+build/
+dist/
+*.spec.bak
+
 # Temporary files
 *.tmp
 *.bak

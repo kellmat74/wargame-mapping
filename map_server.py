@@ -24,6 +24,18 @@ from pathlib import Path
 from typing import Optional
 from flask import Flask, send_file, request, jsonify, Response
 
+
+def _frozen_cmd(script_name: str) -> list:
+    """Build a subprocess command that works both frozen (PyInstaller) and in dev.
+
+    Frozen: [executable, --run, module_name]  (dispatched by main.py)
+    Dev:    [sys.executable, script_name.py]
+    """
+    if getattr(sys, 'frozen', False):
+        return [sys.executable, '--run', script_name.replace('.py', '')]
+    base = Path(__file__).parent
+    return [sys.executable, str(base / script_name)]
+
 # Import region registry for auto-discovery of available PBF files
 from region_registry import (
     detect_region_for_coords,
@@ -293,23 +305,15 @@ def run_generation(region):
                         if geofabrik_region:
                             output_queue.put(f"Auto-detected Geofabrik region: {geofabrik_region}")
 
-            if not geofabrik_region:
-                output_queue.put("WARNING: Could not auto-detect Geofabrik region from coordinates")
-                output_queue.put("Falling back to Overpass API download (may be incomplete)")
-                # Fall back to old script
-                download_script = base_path / 'download_mgrs_data.py'
-            else:
-                # Use new Osmium-based script
-                download_script = base_path / 'download_mgrs_data_osmium.py'
-
             # Convert region format: "51P/TT" -> "51P TT"
             region_arg = region.replace('/', ' ')
 
-            # Build command based on which script we're using
-            if geofabrik_region:
-                cmd = [sys.executable, str(download_script), '--region', geofabrik_region, region_arg]
+            if not geofabrik_region:
+                output_queue.put("WARNING: Could not auto-detect Geofabrik region from coordinates")
+                output_queue.put("Falling back to Overpass API download (may be incomplete)")
+                cmd = _frozen_cmd('download_mgrs_data.py') + [region_arg]
             else:
-                cmd = [sys.executable, str(download_script), region_arg]
+                cmd = _frozen_cmd('download_mgrs_data_osmium.py') + ['--region', geofabrik_region, region_arg]
 
             returncode = run_subprocess(
                 cmd,
@@ -329,9 +333,8 @@ def run_generation(region):
             output_queue.put(f"Data found for region '{region}'")
 
         # Run map generation
-        script_path = base_path / 'tactical_map.py'
         returncode = run_subprocess(
-            [sys.executable, str(script_path)],
+            _frozen_cmd('tactical_map.py'),
             "Generating tactical map..."
         )
 
@@ -477,49 +480,42 @@ def list_detailed_maps():
         maps = []
 
         if output_dir.exists():
-            # Scan for map folders with hexdata.json
-            for country_dir in output_dir.iterdir():
-                if country_dir.is_dir():
-                    for map_dir in country_dir.iterdir():
-                        if map_dir.is_dir():
-                            # Check for versioned folders (timestamp format)
-                            for version_dir in map_dir.iterdir():
-                                if version_dir.is_dir():
-                                    hexdata = list(version_dir.glob('*_hexdata.json'))
-                                    svg = list(version_dir.glob('*_tactical.svg'))
-                                    if hexdata and svg:
-                                        # Load metadata
-                                        with open(hexdata[0]) as f:
-                                            metadata = json.load(f).get('metadata', {})
+            # Scan recursively for any directory containing a hexdata.json + tactical.svg pair
+            for hexdata_file in sorted(output_dir.rglob('*_hexdata.json')):
+                candidate_dir = hexdata_file.parent
+                svg_files = list(candidate_dir.glob('*_tactical.svg'))
+                if not svg_files:
+                    continue
 
-                                        maps.append({
-                                            'path': str(version_dir),
-                                            'country': country_dir.name,
-                                            'name': map_dir.name,
-                                            'version': version_dir.name,
-                                            'render_version': metadata.get('version'),
-                                            'center_lat': metadata.get('center_lat'),
-                                            'center_lon': metadata.get('center_lon'),
-                                            'has_game_map': (version_dir / 'game_map').exists()
-                                        })
+                with open(hexdata_file) as f:
+                    metadata = json.load(f).get('metadata', {})
 
-                            # Also check map_dir directly (for older maps without version folders)
-                            hexdata = list(map_dir.glob('*_hexdata.json'))
-                            svg = list(map_dir.glob('*_tactical.svg'))
-                            if hexdata and svg:
-                                with open(hexdata[0]) as f:
-                                    metadata = json.load(f).get('metadata', {})
+                # Determine version and map name from path structure.
+                # The immediate parent is either a version folder (timestamp) or the map folder itself.
+                parent = candidate_dir
+                rel = parent.relative_to(output_dir)
+                parts = rel.parts  # e.g. ('Europe', 'Germany', 'Hessen', 'Fulda', '2026-...')
 
-                                maps.append({
-                                    'path': str(map_dir),
-                                    'country': country_dir.name,
-                                    'name': map_dir.name,
-                                    'version': None,
-                                    'render_version': metadata.get('version'),
-                                    'center_lat': metadata.get('center_lat'),
-                                    'center_lon': metadata.get('center_lon'),
-                                    'has_game_map': (map_dir / 'game_map').exists()
-                                })
+                if len(parts) >= 2:
+                    version = parts[-1]
+                    name = parts[-2]
+                    # Rejoin everything above the map name as the region display path
+                    country = ' / '.join(parts[:-2]) if len(parts) > 2 else parts[0]
+                else:
+                    version = None
+                    name = parts[0] if parts else candidate_dir.name
+                    country = ''
+
+                maps.append({
+                    'path': str(candidate_dir),
+                    'country': country,
+                    'name': name,
+                    'version': version,
+                    'render_version': metadata.get('version'),
+                    'center_lat': metadata.get('center_lat'),
+                    'center_lon': metadata.get('center_lon'),
+                    'has_game_map': (candidate_dir / 'game_map').exists()
+                })
 
         return jsonify({'maps': maps})
 
