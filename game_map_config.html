@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Map Conversion</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        }
+
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+
+        h1 {
+            margin: 0;
+            color: #00d4ff;
+            font-size: 24px;
+        }
+
+        .header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .restart-btn {
+            padding: 8px 16px;
+            background: #2d4a3e;
+            border: 1px solid #3d6a4e;
+            border-radius: 4px;
+            color: #8fbc8f;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .restart-btn:hover {
+            background: #3d6a4e;
+            border-color: #5a9a6a;
+            color: #fff;
+        }
+
+        .restart-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .nav-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .nav-tab {
+            padding: 10px 20px;
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            color: #aaa;
+            text-decoration: none;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .nav-tab:hover {
+            border-color: #00d4ff;
+            color: #fff;
+        }
+
+        .nav-tab.active {
+            background: #0f3460;
+            color: #00d4ff;
+            border-color: #00d4ff;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .panel {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid #0f3460;
+        }
+
+        .panel h2 {
+            margin: 0 0 15px 0;
+            font-size: 16px;
+            color: #00d4ff;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+
+        .input-field {
+            flex: 1;
+            min-width: 150px;
+        }
+
+        .input-field label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: #aaa;
+            text-transform: uppercase;
+        }
+
+        .input-field input, .input-field select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            background: #1a1a2e;
+            color: #fff;
+            font-size: 14px;
+        }
+
+        .input-field input:focus, .input-field select:focus {
+            outline: none;
+            border-color: #00d4ff;
+        }
+
+        .input-field input[type="range"] {
+            padding: 0;
+            height: 6px;
+            margin-top: 10px;
+        }
+
+        .range-value {
+            text-align: center;
+            font-size: 14px;
+            color: #00d4ff;
+            margin-top: 5px;
+        }
+
+        /* Map list */
+        .map-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+        }
+
+        .map-item {
+            padding: 12px 15px;
+            border-bottom: 1px solid #0f3460;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .map-item:last-child {
+            border-bottom: none;
+        }
+
+        .map-item:hover {
+            background: #1a1a2e;
+        }
+
+        .map-item.selected {
+            background: #0f3460;
+            border-left: 3px solid #00d4ff;
+        }
+
+        .map-item-name {
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .map-item-details {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+
+        .map-item-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            background: #4CAF50;
+            color: white;
+            border-radius: 10px;
+            font-size: 10px;
+            margin-left: 10px;
+        }
+
+        .map-item-badge.pending {
+            background: #ff9800;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #00d4ff;
+            color: #000;
+        }
+
+        .btn-primary:hover {
+            background: #00a8cc;
+        }
+
+        .btn-primary:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #0f3460;
+            color: #fff;
+            border: 1px solid #0f3460;
+        }
+
+        .btn-secondary:hover {
+            border-color: #00d4ff;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        /* Progress panel */
+        .progress-panel {
+            display: none;
+        }
+
+        .progress-panel.visible {
+            display: block;
+        }
+
+        .progress-output {
+            background: #0a0a15;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            padding: 15px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-indicator.running {
+            background: #ff9800;
+            animation: pulse 1s infinite;
+        }
+
+        .status-indicator.complete {
+            background: #4CAF50;
+        }
+
+        .status-indicator.error {
+            background: #f44336;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .empty-state p {
+            margin: 10px 0;
+        }
+
+        /* Refresh button */
+        .refresh-btn {
+            background: none;
+            border: 1px solid #0f3460;
+            color: #aaa;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: auto;
+        }
+
+        .refresh-btn:hover {
+            border-color: #00d4ff;
+            color: #00d4ff;
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .panel-header h2 {
+            margin: 0;
+        }
+
+        /* Collapsible settings sections */
+        .settings-section {
+            margin-bottom: 15px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .settings-section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 15px;
+            background: #0f3460;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .settings-section-header:hover {
+            background: #1a4a80;
+        }
+
+        .settings-section-header h3 {
+            margin: 0;
+            font-size: 13px;
+            color: #00d4ff;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .settings-section-header .toggle-icon {
+            color: #aaa;
+            font-size: 10px;
+            transition: transform 0.2s;
+        }
+
+        .settings-section-header.expanded .toggle-icon {
+            transform: rotate(180deg);
+        }
+
+        .settings-section-content {
+            padding: 15px;
+            background: #16213e;
+            display: none;
+        }
+
+        .settings-section-content.expanded {
+            display: block;
+        }
+
+        /* Color picker styling */
+        .input-field input[type="color"] {
+            width: 100%;
+            height: 36px;
+            padding: 2px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            background: #1a1a2e;
+            cursor: pointer;
+        }
+
+        .input-field input[type="color"]::-webkit-color-swatch-wrapper {
+            padding: 2px;
+        }
+
+        .input-field input[type="color"]::-webkit-color-swatch {
+            border-radius: 2px;
+            border: none;
+        }
+
+        /* Color preview row */
+        .color-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+
+        .color-item {
+            flex: 1;
+            min-width: 80px;
+            max-width: 100px;
+        }
+
+        .color-item label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 11px;
+            color: #aaa;
+            text-transform: uppercase;
+        }
+
+        .color-item input[type="color"] {
+            width: 100%;
+            height: 32px;
+        }
+
+        /* Elevation band sliders */
+        .band-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+
+        .band-row label {
+            flex: 0 0 120px;
+            font-size: 12px;
+            color: #aaa;
+        }
+
+        .band-row input[type="range"] {
+            flex: 1;
+        }
+
+        .band-row .range-value {
+            flex: 0 0 45px;
+            text-align: right;
+            font-size: 12px;
+        }
+
+        /* Reset buttons row */
+        .preset-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .preset-buttons .btn {
+            flex: 1;
+            padding: 8px 12px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header-row">
+            <h1>Wargame Map Generator</h1>
+            <button class="restart-btn" onclick="restartServer()" title="Restart server to pick up code changes">⟳ Restart Server</button>
+        </div>
+
+        <div class="nav-tabs">
+            <a href="/" class="nav-tab">Detailed Map</a>
+            <a href="/game-map" class="nav-tab active">Game Map Conversion</a>
+            <a href="/data-download" class="nav-tab">Data Download</a>
+        </div>
+
+        <!-- Map Selection -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2>Select Detailed Map</h2>
+                <button class="refresh-btn" onclick="loadMaps()">Refresh</button>
+            </div>
+            <div id="mapList" class="map-list">
+                <div class="empty-state">
+                    <p>Loading maps...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Conversion Settings -->
+        <div class="panel" id="settingsPanel" style="display: none;">
+            <h2>Conversion Settings</h2>
+
+            <!-- Basic Settings (expanded by default) -->
+            <div class="settings-section">
+                <div class="settings-section-header expanded" onclick="toggleSection('basicSettings')">
+                    <h3>Basic Settings</h3>
+                    <span class="toggle-icon">▼</span>
+                </div>
+                <div id="basicSettings" class="settings-section-content expanded">
+                    <div class="input-group">
+                        <div class="input-field">
+                            <label>Terrain Style</label>
+                            <select id="terrainStyle" onchange="onTerrainStyleChange()">
+                                <option value="auto">Auto-detect</option>
+                                <option value="temperate">Temperate (Green)</option>
+                                <option value="arid">Arid (Tan/Desert)</option>
+                                <option value="custom">Custom</option>
+                            </select>
+                        </div>
+                        <div class="input-field">
+                            <label>Frame Color</label>
+                            <input type="color" id="frameColor" value="#6B2D2D">
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <div class="input-field">
+                            <label>Elevation Intensity</label>
+                            <input type="range" id="elevationIntensity" min="0" max="2" step="0.1" value="1.0">
+                            <div class="range-value" id="elevationValue">1.0x</div>
+                        </div>
+                        <div class="input-field">
+                            <label>Hillside Intensity</label>
+                            <input type="range" id="hillsideIntensity" min="0" max="2" step="0.1" value="1.0">
+                            <div class="range-value" id="hillsideValue">1.0x</div>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <div class="input-field">
+                            <label>Hillside Color</label>
+                            <input type="color" id="hillsideColor" value="#6B7A60">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Terrain Colors (collapsed by default) -->
+            <div class="settings-section">
+                <div class="settings-section-header" onclick="toggleSection('terrainColors')">
+                    <h3>Terrain Colors</h3>
+                    <span class="toggle-icon">▼</span>
+                </div>
+                <div id="terrainColors" class="settings-section-content">
+                    <div class="color-row">
+                        <div class="color-item">
+                            <label>Water</label>
+                            <input type="color" id="colorWater" value="#7BA3C4">
+                        </div>
+                        <div class="color-item">
+                            <label>Urban</label>
+                            <input type="color" id="colorUrban" value="#A89880">
+                        </div>
+                        <div class="color-item">
+                            <label>Forest</label>
+                            <input type="color" id="colorForest" value="#7A9E70">
+                        </div>
+                        <div class="color-item">
+                            <label>Orchard</label>
+                            <input type="color" id="colorOrchard" value="#8DAE7A">
+                        </div>
+                    </div>
+                    <div class="color-row">
+                        <div class="color-item">
+                            <label>Marsh</label>
+                            <input type="color" id="colorMarsh" value="#8EBDB5">
+                        </div>
+                        <div class="color-item">
+                            <label>Open</label>
+                            <input type="color" id="colorOpen" value="#C8D4A8">
+                        </div>
+                        <div class="color-item">
+                            <label>Sand</label>
+                            <input type="color" id="colorSand" value="#D4C8A0">
+                        </div>
+                        <div class="color-item">
+                            <label>Farmland</label>
+                            <input type="color" id="colorFarmland" value="#D4D4A0">
+                        </div>
+                    </div>
+                    <div class="color-row">
+                        <div class="color-item">
+                            <label>Wetland</label>
+                            <input type="color" id="colorWetland" value="#9DBDB5">
+                        </div>
+                        <div class="color-item">
+                            <label>Heath</label>
+                            <input type="color" id="colorHeath" value="#C8B878">
+                        </div>
+                        <div class="color-item">
+                            <label>Mangrove</label>
+                            <input type="color" id="colorMangrove" value="#5A8A6A">
+                        </div>
+                        <div class="color-item">
+                            <label>Rocky</label>
+                            <input type="color" id="colorRocky" value="#A89888">
+                        </div>
+                    </div>
+                    <div class="preset-buttons">
+                        <button class="btn btn-secondary" onclick="resetToTemperate()">Reset to Temperate</button>
+                        <button class="btn btn-secondary" onclick="resetToArid()">Reset to Arid</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Elevation Band Opacities (collapsed by default) -->
+            <div class="settings-section">
+                <div class="settings-section-header" onclick="toggleSection('elevationBands')">
+                    <h3>Elevation Band Opacities</h3>
+                    <span class="toggle-icon">▼</span>
+                </div>
+                <div id="elevationBands" class="settings-section-content">
+                    <div class="band-row">
+                        <label>Band 0 (Base)</label>
+                        <input type="range" id="band0" min="0" max="0.3" step="0.05" value="0">
+                        <div class="range-value" id="band0Value">0%</div>
+                    </div>
+                    <div class="band-row">
+                        <label>Band 1 (+100m)</label>
+                        <input type="range" id="band1" min="0" max="1" step="0.05" value="0.10">
+                        <div class="range-value" id="band1Value">10%</div>
+                    </div>
+                    <div class="band-row">
+                        <label>Band 2 (+200m)</label>
+                        <input type="range" id="band2" min="0" max="1" step="0.05" value="0.20">
+                        <div class="range-value" id="band2Value">20%</div>
+                    </div>
+                    <div class="band-row">
+                        <label>Band 3 (+300m)</label>
+                        <input type="range" id="band3" min="0" max="1" step="0.05" value="0.30">
+                        <div class="range-value" id="band3Value">30%</div>
+                    </div>
+                    <div class="band-row">
+                        <label>Band 4 (+400m)</label>
+                        <input type="range" id="band4" min="0" max="1" step="0.05" value="0.40">
+                        <div class="range-value" id="band4Value">40%</div>
+                    </div>
+                    <div class="band-row">
+                        <label>Band 5 (+500m)</label>
+                        <input type="range" id="band5" min="0" max="1" step="0.05" value="0.50">
+                        <div class="range-value" id="band5Value">50%</div>
+                    </div>
+                    <div class="band-row">
+                        <label>Band 6 (+600m+)</label>
+                        <input type="range" id="band6" min="0" max="1" step="0.05" value="0.60">
+                        <div class="range-value" id="band6Value">60%</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Label Settings (collapsed by default) -->
+            <div class="settings-section">
+                <div class="settings-section-header" onclick="toggleSection('labelSettings')">
+                    <h3>Label Settings</h3>
+                    <span class="toggle-icon">▼</span>
+                </div>
+                <div id="labelSettings" class="settings-section-content">
+                    <div class="input-group">
+                        <div class="input-field">
+                            <label>Label Rows</label>
+                            <input type="text" id="labelRows" value="1, 5, 10, 15, 20, 25">
+                            <div class="range-value" style="text-align: left; font-size: 11px; color: #888;">Comma-separated row numbers</div>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <div class="input-field">
+                            <label>Label Color</label>
+                            <input type="color" id="labelColor" value="#5e5959">
+                        </div>
+                        <div class="input-field">
+                            <label>Label Opacity</label>
+                            <input type="range" id="labelOpacity" min="0" max="1" step="0.1" value="0.7">
+                            <div class="range-value" id="labelOpacityValue">70%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="button-row" style="margin-top: 15px;">
+                <button class="btn btn-secondary" id="rerenderBtn" onclick="startRerender()">
+                    Re-render Detailed Map
+                </button>
+                <button class="btn btn-primary" id="convertBtn" onclick="startConversion()">
+                    Convert to Game Map
+                </button>
+            </div>
+        </div>
+
+        <!-- Progress Panel -->
+        <div class="panel progress-panel" id="progressPanel">
+            <h2>
+                <span class="status-indicator" id="statusIndicator"></span>
+                <span id="statusText">Converting...</span>
+            </h2>
+            <div class="progress-output" id="progressOutput"></div>
+        </div>
+    </div>
+
+    <script>
+        let selectedMap = null;
+        let eventSource = null;
+
+        // Restart server to pick up code changes
+        async function restartServer() {
+            const btn = document.querySelector('.restart-btn');
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Restarting...';
+
+            try {
+                await fetch('/api/restart', { method: 'POST' });
+            } catch (e) {
+                // Expected - server is shutting down
+            }
+
+            // Wait and try to reconnect
+            btn.textContent = 'Reconnecting...';
+            let attempts = 0;
+            const maxAttempts = 20;
+
+            const tryReconnect = async () => {
+                try {
+                    const response = await fetch('/api/available-maps');
+                    if (response.ok) {
+                        btn.textContent = originalText;
+                        btn.disabled = false;
+                        location.reload();
+                        return;
+                    }
+                } catch (e) {
+                    // Server not ready yet
+                }
+
+                attempts++;
+                if (attempts < maxAttempts) {
+                    setTimeout(tryReconnect, 500);
+                } else {
+                    btn.textContent = 'Restart failed';
+                    btn.disabled = false;
+                }
+            };
+
+            setTimeout(tryReconnect, 1000);
+        }
+
+        // Color presets
+        const TEMPERATE_COLORS = {
+            water: '#7BA3C4', urban: '#A89880', forest: '#7A9E70',
+            orchard: '#8DAE7A', marsh: '#8EBDB5', open: '#C8D4A8', sand: '#D4C8A0',
+            farmland: '#D4D4A0', wetland: '#9DBDB5', heath: '#C8B878',
+            mangrove: '#5A8A6A', rocky: '#A89888'
+        };
+        const ARID_COLORS = {
+            water: '#7BA3C4', urban: '#A89880', forest: '#9AAE80',
+            orchard: '#A8B890', marsh: '#8EBDB5', open: '#D4C8A0', sand: '#E0D4B0',
+            farmland: '#E0D8A8', wetland: '#A8C8C0', heath: '#D8C888',
+            mangrove: '#7A9A7A', rocky: '#B8A898'
+        };
+        const HILLSIDE_COLORS = { temperate: '#6B7A60', arid: '#9A8B70' };
+
+        // Toggle collapsible section
+        function toggleSection(sectionId) {
+            const section = document.getElementById(sectionId);
+            const header = section.previousElementSibling;
+            const isExpanded = section.classList.contains('expanded');
+
+            if (isExpanded) {
+                section.classList.remove('expanded');
+                header.classList.remove('expanded');
+            } else {
+                section.classList.add('expanded');
+                header.classList.add('expanded');
+            }
+        }
+
+        // Reset terrain colors to temperate palette
+        function resetToTemperate() {
+            Object.entries(TEMPERATE_COLORS).forEach(([key, value]) => {
+                const elementId = 'color' + key.charAt(0).toUpperCase() + key.slice(1);
+                document.getElementById(elementId).value = value;
+            });
+            document.getElementById('hillsideColor').value = HILLSIDE_COLORS.temperate;
+        }
+
+        // Reset terrain colors to arid palette
+        function resetToArid() {
+            Object.entries(ARID_COLORS).forEach(([key, value]) => {
+                const elementId = 'color' + key.charAt(0).toUpperCase() + key.slice(1);
+                document.getElementById(elementId).value = value;
+            });
+            document.getElementById('hillsideColor').value = HILLSIDE_COLORS.arid;
+        }
+
+        // Handle terrain style change
+        function onTerrainStyleChange() {
+            const style = document.getElementById('terrainStyle').value;
+            if (style === 'temperate') {
+                resetToTemperate();
+            } else if (style === 'arid') {
+                resetToArid();
+            }
+            // 'auto' and 'custom' leave colors as-is
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadMaps();
+
+            // Update range value displays
+            document.getElementById('elevationIntensity').addEventListener('input', (e) => {
+                document.getElementById('elevationValue').textContent = e.target.value + 'x';
+            });
+
+            document.getElementById('hillsideIntensity').addEventListener('input', (e) => {
+                document.getElementById('hillsideValue').textContent = e.target.value + 'x';
+            });
+
+            document.getElementById('labelOpacity').addEventListener('input', (e) => {
+                document.getElementById('labelOpacityValue').textContent = Math.round(e.target.value * 100) + '%';
+            });
+
+            // Add listeners for elevation band sliders
+            for (let i = 0; i <= 6; i++) {
+                document.getElementById('band' + i).addEventListener('input', (e) => {
+                    document.getElementById('band' + i + 'Value').textContent = Math.round(e.target.value * 100) + '%';
+                });
+            }
+        });
+
+        async function loadMaps() {
+            const mapList = document.getElementById('mapList');
+            mapList.innerHTML = '<div class="empty-state"><p>Loading maps...</p></div>';
+
+            try {
+                const response = await fetch('/api/detailed-maps');
+                const data = await response.json();
+
+                if (data.maps && data.maps.length > 0) {
+                    mapList.innerHTML = data.maps.map(map => {
+                        const badge = map.has_game_map
+                            ? '<span class="map-item-badge">Converted</span>'
+                            : '<span class="map-item-badge pending">Pending</span>';
+                        const version = map.version ? ` (${map.version})` : '';
+                        const renderVersion = map.render_version
+                            ? `<span style="color: #00d4ff; font-size: 11px; margin-left: 8px;">${map.render_version}</span>`
+                            : '';
+                        const coords = map.center_lat && map.center_lon
+                            ? `${map.center_lat.toFixed(4)}, ${map.center_lon.toFixed(4)}`
+                            : 'Unknown location';
+
+                        return `
+                            <div class="map-item" data-path="${map.path}" onclick="selectMap(this)">
+                                <div class="map-item-name">
+                                    ${map.country}/${map.name}${version}
+                                    ${renderVersion}
+                                    ${badge}
+                                </div>
+                                <div class="map-item-details">${coords}</div>
+                            </div>
+                        `;
+                    }).join('');
+                } else {
+                    mapList.innerHTML = `
+                        <div class="empty-state">
+                            <p>No detailed maps found.</p>
+                            <p>Generate a detailed map first using the "Detailed Map" tab.</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                mapList.innerHTML = `
+                    <div class="empty-state">
+                        <p>Error loading maps: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function selectMap(element) {
+            // Deselect previous
+            document.querySelectorAll('.map-item.selected').forEach(el => {
+                el.classList.remove('selected');
+            });
+
+            // Select new
+            element.classList.add('selected');
+            selectedMap = element.dataset.path;
+
+            // Show settings panel
+            document.getElementById('settingsPanel').style.display = 'block';
+        }
+
+        async function startConversion() {
+            if (!selectedMap) {
+                alert('Please select a map first');
+                return;
+            }
+
+            // Parse label rows from text input
+            const labelRowsText = document.getElementById('labelRows').value;
+            const labelRows = labelRowsText.split(',')
+                .map(s => parseInt(s.trim()))
+                .filter(n => !isNaN(n));
+
+            const config = {
+                map_path: selectedMap,
+                terrain_style: document.getElementById('terrainStyle').value,
+                elevation_intensity: parseFloat(document.getElementById('elevationIntensity').value),
+                hillside_intensity: parseFloat(document.getElementById('hillsideIntensity').value),
+                hillside_color: document.getElementById('hillsideColor').value,
+                frame_color: document.getElementById('frameColor').value,
+                terrain_colors: {
+                    water: document.getElementById('colorWater').value,
+                    urban: document.getElementById('colorUrban').value,
+                    forest: document.getElementById('colorForest').value,
+                    orchard: document.getElementById('colorOrchard').value,
+                    marsh: document.getElementById('colorMarsh').value,
+                    open: document.getElementById('colorOpen').value,
+                    sand: document.getElementById('colorSand').value,
+                    farmland: document.getElementById('colorFarmland').value,
+                    wetland: document.getElementById('colorWetland').value,
+                    heath: document.getElementById('colorHeath').value,
+                    mangrove: document.getElementById('colorMangrove').value,
+                    rocky: document.getElementById('colorRocky').value,
+                },
+                elevation_band_opacities: [
+                    parseFloat(document.getElementById('band0').value),
+                    parseFloat(document.getElementById('band1').value),
+                    parseFloat(document.getElementById('band2').value),
+                    parseFloat(document.getElementById('band3').value),
+                    parseFloat(document.getElementById('band4').value),
+                    parseFloat(document.getElementById('band5').value),
+                    parseFloat(document.getElementById('band6').value),
+                ],
+                label_rows: labelRows,
+                label_color: document.getElementById('labelColor').value,
+                label_opacity: parseFloat(document.getElementById('labelOpacity').value)
+            };
+
+            // Show progress panel
+            const progressPanel = document.getElementById('progressPanel');
+            const progressOutput = document.getElementById('progressOutput');
+            const statusIndicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+            const convertBtn = document.getElementById('convertBtn');
+
+            progressPanel.classList.add('visible');
+            progressOutput.textContent = '';
+            statusIndicator.className = 'status-indicator running';
+            statusText.textContent = 'Converting...';
+            convertBtn.disabled = true;
+
+            try {
+                // Start conversion
+                const response = await fetch('/api/convert-game-map', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to start conversion');
+                }
+
+                // Connect to progress stream
+                eventSource = new EventSource('/api/game-map-progress');
+
+                eventSource.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+
+                    if (data.type === 'output') {
+                        progressOutput.textContent += data.message + '\n';
+                        progressOutput.scrollTop = progressOutput.scrollHeight;
+                    } else if (data.type === 'complete') {
+                        statusIndicator.className = 'status-indicator complete';
+                        statusText.textContent = 'Conversion Complete!';
+                        convertBtn.disabled = false;
+                        eventSource.close();
+                        loadMaps(); // Refresh map list
+                    } else if (data.type === 'error') {
+                        statusIndicator.className = 'status-indicator error';
+                        statusText.textContent = 'Error: ' + data.message;
+                        convertBtn.disabled = false;
+                        eventSource.close();
+                    }
+                };
+
+                eventSource.onerror = () => {
+                    statusIndicator.className = 'status-indicator error';
+                    statusText.textContent = 'Connection lost';
+                    convertBtn.disabled = false;
+                    eventSource.close();
+                };
+
+            } catch (error) {
+                statusIndicator.className = 'status-indicator error';
+                statusText.textContent = 'Error: ' + error.message;
+                convertBtn.disabled = false;
+            }
+        }
+
+        async function startRerender() {
+            if (!selectedMap) {
+                alert('Please select a map first');
+                return;
+            }
+
+            // Confirm re-render (replaces existing folder)
+            if (!confirm('This will re-render the detailed map with the current version of the rendering engine. The existing render will be replaced. Continue?')) {
+                return;
+            }
+
+            // Show progress panel
+            const progressPanel = document.getElementById('progressPanel');
+            const progressOutput = document.getElementById('progressOutput');
+            const statusIndicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+            const convertBtn = document.getElementById('convertBtn');
+            const rerenderBtn = document.getElementById('rerenderBtn');
+
+            progressPanel.classList.add('visible');
+            progressOutput.textContent = '';
+            statusIndicator.className = 'status-indicator running';
+            statusText.textContent = 'Re-rendering...';
+            convertBtn.disabled = true;
+            rerenderBtn.disabled = true;
+
+            try {
+                // Start re-render
+                const response = await fetch('/api/rerender-map', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ map_path: selectedMap })
+                });
+
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.error || 'Failed to start re-render');
+                }
+
+                // Connect to progress stream (uses main generation progress endpoint)
+                eventSource = new EventSource('/api/progress');
+
+                eventSource.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+
+                    if (data.type === 'output') {
+                        progressOutput.textContent += data.message + '\n';
+                        progressOutput.scrollTop = progressOutput.scrollHeight;
+                    } else if (data.type === 'complete') {
+                        statusIndicator.className = 'status-indicator complete';
+                        statusText.textContent = 'Re-render Complete!';
+                        convertBtn.disabled = false;
+                        rerenderBtn.disabled = false;
+                        eventSource.close();
+                        loadMaps(); // Refresh map list
+                    } else if (data.type === 'error') {
+                        statusIndicator.className = 'status-indicator error';
+                        statusText.textContent = 'Error: ' + data.message;
+                        convertBtn.disabled = false;
+                        rerenderBtn.disabled = false;
+                        eventSource.close();
+                    }
+                };
+
+                eventSource.onerror = () => {
+                    statusIndicator.className = 'status-indicator error';
+                    statusText.textContent = 'Connection lost';
+                    convertBtn.disabled = false;
+                    rerenderBtn.disabled = false;
+                    eventSource.close();
+                };
+
+            } catch (error) {
+                statusIndicator.className = 'status-indicator error';
+                statusText.textContent = 'Error: ' + error.message;
+                convertBtn.disabled = false;
+                rerenderBtn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>
