@@ -20,6 +20,8 @@ Usage:
 import json
 import subprocess
 import re
+import time
+import urllib.request
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -30,6 +32,13 @@ GEOFABRIK_DIR = Path(__file__).parent / "data" / "geofabrik"
 CACHE_DIR = Path(__file__).parent / "cache"
 # Registry file stored in the geofabrik directory
 REGISTRY_FILE = GEOFABRIK_DIR / "regions.json"
+
+GEOFABRIK_INDEX_URL = "https://download.geofabrik.de/index-v1.json"
+_INDEX_CACHE_FILE = GEOFABRIK_DIR / "index-v1.json"
+_INDEX_CACHE_DAYS = 30
+
+_geofabrik_index_cache: Optional[dict] = None
+_geofabrik_lookup_cache: Optional[dict] = None
 
 # Geofabrik base URLs by continent (flat lookup for backward compatibility)
 # This is auto-generated from GEOFABRIK_REGIONS - keep them in sync
@@ -458,10 +467,132 @@ _CONTINENT_DISPLAY = {
     "asia": "Asia",
     "africa": "Africa",
     "north-america": "North America",
+    "central-america": "Central America",
     "south-america": "South America",
     "australia-oceania": "Australia-Oceania",
     "antarctica": "Antarctica",
 }
+
+
+def _load_geofabrik_index() -> Optional[dict]:
+    """Fetch and cache the Geofabrik region index (index-v1.json).
+
+    Refreshes from the network at most every 30 days. Falls back to the
+    on-disk cache if the network is unavailable. Returns None if no data
+    can be obtained.
+    """
+    global _geofabrik_index_cache, _geofabrik_lookup_cache
+    if _geofabrik_index_cache is not None:
+        return _geofabrik_index_cache
+
+    need_refresh = True
+    if _INDEX_CACHE_FILE.exists():
+        age_days = (time.time() - _INDEX_CACHE_FILE.stat().st_mtime) / 86400
+        need_refresh = age_days > _INDEX_CACHE_DAYS
+
+    if need_refresh:
+        try:
+            GEOFABRIK_DIR.mkdir(parents=True, exist_ok=True)
+            req = urllib.request.Request(
+                GEOFABRIK_INDEX_URL,
+                headers={"User-Agent": "WargameMapGenerator/3.1"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw = resp.read()
+            _INDEX_CACHE_FILE.write_bytes(raw)
+        except Exception as e:
+            print(f"  Note: Could not fetch Geofabrik index ({e}), using cached version")
+
+    if _INDEX_CACHE_FILE.exists():
+        try:
+            data = json.loads(_INDEX_CACHE_FILE.read_text())
+            _geofabrik_index_cache = data
+            # Index is GeoJSON; properties holds id/parent/name/urls
+            _geofabrik_lookup_cache = {
+                f["properties"]["id"]: f["properties"]
+                for f in data.get("features", [])
+                if "properties" in f and "id" in f["properties"]
+            }
+            return data
+        except Exception as e:
+            print(f"  Warning: Could not parse Geofabrik index: {e}")
+
+    return None
+
+
+def _get_index_lookup() -> Optional[dict]:
+    """Return a cached {feature_id: feature} dict from the Geofabrik index."""
+    if _geofabrik_lookup_cache is not None:
+        return _geofabrik_lookup_cache
+    _load_geofabrik_index()
+    return _geofabrik_lookup_cache
+
+
+def _build_hierarchy_from_index(index: dict) -> dict:
+    """Convert Geofabrik index-v1.json features into the same hierarchy dict
+    that get_regions_by_continent() produces from the static GEOFABRIK_REGIONS.
+
+    continent (parent=None) -> country (parent=continent) -> subregion (parent=country)
+    """
+    lookup = {
+        f["properties"]["id"]: f["properties"]
+        for f in index.get("features", [])
+        if "properties" in f and "id" in f["properties"]
+    }
+    if not lookup:
+        return {}
+
+    continent_ids = {fid for fid, f in lookup.items() if f.get("parent") is None}
+
+    countries_by_continent: Dict[str, list] = {}
+    subregions_by_country: Dict[str, list] = {}
+
+    for fid, feature in lookup.items():
+        parent = feature.get("parent")
+        if parent is None:
+            continue
+        if parent in continent_ids:
+            countries_by_continent.setdefault(parent, []).append(feature)
+        else:
+            grandparent = lookup.get(parent, {}).get("parent")
+            if grandparent in continent_ids:
+                subregions_by_country.setdefault(parent, []).append(feature)
+
+    continent_order = [
+        "europe", "north-america", "central-america", "asia",
+        "south-america", "africa", "australia-oceania", "antarctica",
+    ]
+
+    result = {}
+    for cont_id in continent_order:
+        if cont_id not in continent_ids:
+            continue
+
+        countries_data = {}
+        for country_feature in countries_by_continent.get(cont_id, []):
+            cid = country_feature["id"]
+            sub_features = subregions_by_country.get(cid, [])
+            subregion_list = sorted(
+                [
+                    {
+                        "name": s["id"],
+                        "display_name": s.get("name", derive_display_name(s["id"])),
+                    }
+                    for s in sub_features
+                ],
+                key=lambda x: x["display_name"],
+            )
+            countries_data[cid] = {
+                "display_name": country_feature.get("name", derive_display_name(cid)),
+                "subregions": subregion_list,
+            }
+
+        result[cont_id] = {
+            "display_name": _CONTINENT_DISPLAY.get(cont_id, cont_id.replace("-", " ").title()),
+            "countries": dict(sorted(countries_data.items(), key=lambda x: x[1]["display_name"])),
+        }
+
+    return result
 
 
 def get_region_output_path_segments(region_name: str) -> list:
@@ -471,12 +602,38 @@ def get_region_output_path_segments(region_name: str) -> list:
         "hessen"     -> ["Europe", "Germany", "Hessen"]
         "ukraine"    -> ["Europe", "Ukraine"]
         "california" -> ["North America", "US", "California"]
-        "japan"      -> ["Asia", "Japan"]
+        "cuba"       -> ["Central America", "Cuba"]
         unknown      -> [derive_display_name(region_name)]
     """
     if not region_name:
         return []
 
+    # Try live index first
+    lookup = _get_index_lookup()
+    if lookup and region_name in lookup:
+        feature = lookup[region_name]
+        continent_ids = {fid for fid, f in lookup.items() if f.get("parent") is None}
+        parent_id = feature.get("parent")
+
+        if parent_id is None:
+            # This is a continent entry — shouldn't be a map target, but handle it
+            return [feature.get("name", derive_display_name(region_name))]
+
+        if parent_id in continent_ids:
+            # Country directly under a continent
+            cont_display = _CONTINENT_DISPLAY.get(parent_id, derive_display_name(parent_id))
+            return [cont_display, feature.get("name", derive_display_name(region_name))]
+
+        # Subregion — look up the parent country
+        country_feature = lookup.get(parent_id)
+        if country_feature:
+            grandparent_id = country_feature.get("parent")
+            cont_display = _CONTINENT_DISPLAY.get(grandparent_id, derive_display_name(grandparent_id or ""))
+            country_display = country_feature.get("name", derive_display_name(parent_id))
+            region_display = feature.get("name", derive_display_name(region_name))
+            return [cont_display, country_display, region_display]
+
+    # Fall back to static dict
     for cont_key, countries in GEOFABRIK_REGIONS.items():
         cont_display = _CONTINENT_DISPLAY.get(cont_key, cont_key.replace("-", " ").title())
         for country_key, country_info in countries.items():
@@ -503,22 +660,27 @@ def get_geofabrik_url(region_name: str, continent: str = None, country: str = No
         get_geofabrik_url('ukraine') -> .../europe/ukraine-latest.osm.pbf
         get_geofabrik_url('california', 'north-america', 'us') -> .../north-america/us/california-latest.osm.pbf
     """
-    # If continent and country provided, this is a subregion
+    # If continent and country provided, this is a subregion (explicit path)
     if continent and country:
         return f"https://download.geofabrik.de/{continent}/{country}/{region_name}-latest.osm.pbf"
 
-    # Check if it's a known country in the new hierarchy
+    # Try live index — each feature has the authoritative pbf URL
+    lookup = _get_index_lookup()
+    if lookup and region_name in lookup:
+        pbf_url = lookup[region_name].get("urls", {}).get("pbf")
+        if pbf_url:
+            return pbf_url
+
+    # Fall back to static hierarchy
     for cont_name, countries in GEOFABRIK_REGIONS.items():
         if region_name in countries:
             return f"https://download.geofabrik.de/{cont_name}/{region_name}-latest.osm.pbf"
 
-    # Check if it's a subregion nested under a country
     for cont_name, countries in GEOFABRIK_REGIONS.items():
         for country_name, country_info in countries.items():
             if region_name in country_info.get("subregions", []):
                 return f"https://download.geofabrik.de/{cont_name}/{country_name}/{region_name}-latest.osm.pbf"
 
-    # Fall back to old GEOFABRIK_CONTINENTS lookup; warn if neither found
     continent = GEOFABRIK_CONTINENTS.get(region_name)
     if continent is None:
         print(f"  Warning: unknown continent for region '{region_name}', URL may be wrong")
@@ -546,18 +708,29 @@ def get_regions_by_continent() -> Dict[str, dict]:
         }
     }
     """
+    # Try live Geofabrik index first (545 regions, includes central-america etc.)
+    index = _load_geofabrik_index()
+    if index:
+        result = _build_hierarchy_from_index(index)
+        if result:
+            return result
+
+    # Fall back to static GEOFABRIK_REGIONS
     continent_display = {
         "europe": "Europe",
         "asia": "Asia",
         "africa": "Africa",
         "north-america": "North America",
+        "central-america": "Central America",
         "south-america": "South America",
         "australia-oceania": "Oceania",
     }
 
-    # Build hierarchical structure from GEOFABRIK_REGIONS
     result = {}
-    continent_order = ["europe", "north-america", "asia", "south-america", "africa", "australia-oceania"]
+    continent_order = [
+        "europe", "north-america", "central-america", "asia",
+        "south-america", "africa", "australia-oceania",
+    ]
 
     for continent in continent_order:
         if continent not in GEOFABRIK_REGIONS:
@@ -570,21 +743,14 @@ def get_regions_by_continent() -> Dict[str, dict]:
                 {"name": sr, "display_name": derive_display_name(sr)}
                 for sr in sorted(subregions, key=lambda x: derive_display_name(x))
             ]
-
             countries_data[country_name] = {
                 "display_name": derive_display_name(country_name),
                 "subregions": subregion_list,
             }
 
-        # Sort countries by display name
-        sorted_countries = dict(sorted(
-            countries_data.items(),
-            key=lambda x: x[1]["display_name"]
-        ))
-
         result[continent] = {
             "display_name": continent_display.get(continent, continent.title()),
-            "countries": sorted_countries,
+            "countries": dict(sorted(countries_data.items(), key=lambda x: x[1]["display_name"])),
         }
 
     return result
