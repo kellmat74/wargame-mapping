@@ -1596,9 +1596,9 @@
             // Regions are auto-discovered from data/geofabrik/*.osm.pbf files
         ];
 
-        // Approximate meters per degree
+        // Approximate meters per degree (equatorial values; longitude scaled by cos(lat) at use site)
         const METERS_PER_DEG_LAT = 110574;
-        const METERS_PER_DEG_LON = 101320;
+        const METERS_PER_DEG_LON = 111320;  // equatorial — must multiply by cos(lat) when converting
 
         // ============================================
         // UI Functions
@@ -1783,7 +1783,7 @@
             // North component = distance * cos(bearing)
             // East component = distance * sin(bearing)
             const deltaLat = distance * Math.cos(bearingRad) / METERS_PER_DEG_LAT;
-            const deltaLon = distance * Math.sin(bearingRad) / METERS_PER_DEG_LON;
+            const deltaLon = distance * Math.sin(bearingRad) / (METERS_PER_DEG_LON * Math.cos(state.centerLat * Math.PI / 180));
 
             // Update state - geographic shift
             state.shiftNorth += distance * Math.cos(bearingRad);
