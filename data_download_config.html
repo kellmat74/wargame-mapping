@@ -493,28 +493,6 @@
             </div>
         </div>
 
-        <!-- Progress Panel -->
-        <div class="panel progress-panel" id="progressPanel">
-            <h2>
-                <span class="status-indicator running" id="statusIndicator"></span>
-                <span id="statusText">Downloading...</span>
-            </h2>
-            <div class="progress-output" id="progressOutput"></div>
-        </div>
-
-        <!-- Downloaded Regions Panel -->
-        <div class="panel">
-            <div class="panel-header">
-                <h2>Downloaded Regions</h2>
-                <button class="refresh-btn-small" onclick="loadDownloaded()">Refresh</button>
-            </div>
-            <div id="downloadedList" class="region-list">
-                <div class="empty-state">
-                    <p>Loading...</p>
-                </div>
-            </div>
-        </div>
-
         <!-- Settings Panel -->
         <div class="panel">
             <div class="settings-toggle" id="settingsToggle" onclick="toggleSettings()">
@@ -542,6 +520,28 @@
                     <button class="btn btn-primary btn-small" onclick="saveSettings()">Save</button>
                     <button class="btn btn-secondary btn-small" onclick="cancelSettings()">Cancel</button>
                     <span id="settingsSaveStatus" style="font-size:12px;color:#4CAF50;align-self:center;display:none;">Saved.</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Progress Panel -->
+        <div class="panel progress-panel" id="progressPanel">
+            <h2>
+                <span class="status-indicator running" id="statusIndicator"></span>
+                <span id="statusText">Downloading...</span>
+            </h2>
+            <div class="progress-output" id="progressOutput"></div>
+        </div>
+
+        <!-- Downloaded Regions Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2>Downloaded Regions</h2>
+                <button class="refresh-btn-small" onclick="loadDownloaded()">Refresh</button>
+            </div>
+            <div id="downloadedList" class="region-list">
+                <div class="empty-state">
+                    <p>Loading...</p>
                 </div>
             </div>
         </div>
