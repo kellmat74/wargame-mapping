@@ -5306,6 +5306,7 @@ def extract_single_mgrs_square(mgrs_region: str, available_pbfs: list) -> str:
 
     # Detect the correct Geofabrik region for this MGRS square by geography
     detected_region = None
+    center_lat, center_lon = None, None
     try:
         m = mgrs.MGRS()
         center_lat, center_lon = m.toLatLon(f"{gzd}{square}5050")
@@ -5315,6 +5316,20 @@ def extract_single_mgrs_square(mgrs_region: str, available_pbfs: list) -> str:
 
     if detected_region:
         regions_to_try = [(detected_region, None)]
+    elif center_lat is not None:
+        # No region bbox contains the point (e.g. off-coast square).
+        # Sort available PBFs by proximity of their bbox centroid to the target
+        # so that Cuba beats Monaco for Caribbean waters, etc.
+        region_info = get_available_regions()
+        def _centroid_dist(item):
+            info = region_info.get(item[0])
+            if not info:
+                return float('inf')
+            mn_lon, mn_lat, mx_lon, mx_lat = info["bounds"]
+            dlat = (mn_lat + mx_lat) / 2 - center_lat
+            dlon = (mn_lon + mx_lon) / 2 - center_lon
+            return dlat * dlat + dlon * dlon
+        regions_to_try = sorted(available_pbfs, key=_centroid_dist)
     else:
         regions_to_try = available_pbfs
 
