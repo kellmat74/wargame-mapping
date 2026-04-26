@@ -52,9 +52,7 @@ def get_osmium_path() -> str:
         base = Path(__file__).parent
 
     candidates = [
-        base / 'assets' / 'bin' / f'osmium-{sys.platform}',
-        base / 'assets' / 'bin' / 'osmium-darwin',  # Mac fallback name
-        base / 'assets' / 'bin' / 'osmium-win.exe',
+        base / 'assets' / 'bin' / ('osmium.exe' if sys.platform == 'win32' else 'osmium'),
     ]
     for p in candidates:
         if p.exists():

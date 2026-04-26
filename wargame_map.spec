@@ -42,11 +42,10 @@ a = Analysis(
     ['main.py'],
     pathex=[str(ROOT)],
     binaries=[
-        # Bundled osmium binaries — include both platforms; only the matching
-        # one will be used at runtime via get_osmium_path().
-        (str(ROOT / 'assets' / 'bin' / 'osmium-darwin'), 'assets/bin'),
-        # Windows binary added here when available:
-        # (str(ROOT / 'assets' / 'bin' / 'osmium-win.exe'), 'assets/bin'),
+        # Bundled osmium binary for this platform.
+        # Mac:     assets/bin/osmium
+        # Windows: assets/bin/osmium.exe  (add when building on Windows)
+        (str(ROOT / 'assets' / 'bin' / 'osmium'), 'assets/bin'),
     ],
     datas=[
         # HTML/JS UI files
@@ -54,6 +53,8 @@ a = Analysis(
         (str(ROOT / 'game_map_config.html'),     '.'),
         # Config
         (str(ROOT / 'map_defaults.json'),        '.'),
+        # Monaco sample data for first-run demo
+        (str(ROOT / 'sample_data'),              'sample_data'),
         # App icon
         (str(ROOT / 'assets'),                   'assets'),
     ],

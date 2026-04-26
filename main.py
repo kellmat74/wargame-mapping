@@ -9,26 +9,31 @@ the app, all child-process calls route through this file via --run <module>
 instead of trying to exec .py files directly.
 """
 
+import json
 import os
+import shutil
 import sys
 import threading
-import time
 from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
 # Frozen subprocess dispatch — must run BEFORE any heavy imports
 # ---------------------------------------------------------------------------
-# When frozen, map_server spawns: [sys.executable, '--run', 'tactical_map', ...]
-# This block intercepts that and calls the right module's main().
 if getattr(sys, 'frozen', False) and '--run' in sys.argv:
     _run_idx = sys.argv.index('--run')
     _module = sys.argv[_run_idx + 1]
-    # Strip --run <module> so the target sees clean argv
     sys.argv = sys.argv[:_run_idx] + sys.argv[_run_idx + 2:]
 
-    # Change to bundle directory so relative data paths work
-    os.chdir(Path(sys._MEIPASS))
+    # Restore workspace as cwd so relative data paths work
+    _prefs_file = Path.home() / '.wargame_map_prefs.json'
+    if _prefs_file.exists():
+        try:
+            _workspace = Path(json.loads(_prefs_file.read_text()).get('workspace', ''))
+            if _workspace.exists():
+                os.chdir(_workspace)
+        except Exception:
+            pass
 
     if _module == 'tactical_map':
         from tactical_map import main as _m; _m(); sys.exit(0)
@@ -54,20 +59,83 @@ from PySide6.QtGui import QIcon
 
 
 PORT = 8080
+PREFS_FILE = Path.home() / '.wargame_map_prefs.json'
 
 
-def base_dir() -> Path:
-    """Root directory for bundled assets and Python files."""
+def bundle_dir() -> Path:
+    """Directory where the app's code and assets live (read-only when frozen)."""
     if getattr(sys, 'frozen', False):
         return Path(sys._MEIPASS)
     return Path(__file__).parent
 
 
-def start_flask(ready_event: threading.Event) -> None:
-    """Run the Flask server in a daemon thread."""
-    os.chdir(base_dir())
+def load_prefs() -> dict:
+    try:
+        return json.loads(PREFS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def save_prefs(prefs: dict) -> None:
+    PREFS_FILE.write_text(json.dumps(prefs, indent=2))
+
+
+def default_workspace() -> Path:
+    """Default workspace location for a packaged install."""
+    return Path.home() / 'Documents' / 'Wargame Maps'
+
+
+def resolve_workspace() -> Path:
+    """Return the active workspace directory, creating it if needed."""
+    prefs = load_prefs()
+    workspace = Path(prefs['workspace']) if 'workspace' in prefs else None
+
+    if workspace is None:
+        if getattr(sys, 'frozen', False):
+            workspace = default_workspace()
+        else:
+            workspace = bundle_dir()  # dev mode: use project root
+
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    # Persist if this is the first time we're setting it
+    if 'workspace' not in prefs:
+        prefs['workspace'] = str(workspace)
+        save_prefs(prefs)
+
+    return workspace
+
+
+def seed_workspace(workspace: Path) -> None:
+    """Copy sample data into a fresh workspace so the demo works out of the box."""
+    sample_src = bundle_dir() / 'sample_data'
+    if not sample_src.exists():
+        return
+
+    # Copy data/ tree
+    src_data = sample_src / 'data'
+    if src_data.exists():
+        dst_data = workspace / 'data'
+        for item in src_data.rglob('*'):
+            rel = item.relative_to(src_data)
+            dst = dst_data / rel
+            if item.is_dir():
+                dst.mkdir(parents=True, exist_ok=True)
+            elif not dst.exists():  # never overwrite user data
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(item, dst)
+
+    # Drop in a starter map_config.json only if one doesn't exist
+    src_config = sample_src / 'map_config.json'
+    dst_config = workspace / 'map_config.json'
+    if src_config.exists() and not dst_config.exists():
+        shutil.copy2(src_config, dst_config)
+
+
+def start_flask(workspace: Path, ready_event: threading.Event) -> None:
+    """Run the Flask server in a daemon thread from the workspace directory."""
+    os.chdir(workspace)
     import map_server
-    # Signal the window to load once Flask has bound its port
     ready_event.set()
     map_server.app.run(host='127.0.0.1', port=PORT, debug=False, use_reloader=False)
 
@@ -78,7 +146,7 @@ class AppWindow(QMainWindow):
         self.setWindowTitle("Wargame Map Generator")
         self.resize(1440, 900)
 
-        icon_path = base_dir() / 'assets' / 'icon.icns'
+        icon_path = bundle_dir() / 'assets' / 'icon.icns'
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
@@ -87,7 +155,6 @@ class AppWindow(QMainWindow):
             QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True
         )
         self.setCentralWidget(self._browser)
-
         self._browser.setHtml(
             "<body style='background:#1a1f2e;color:#8b9dc3;font-family:sans-serif;"
             "display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
@@ -98,11 +165,13 @@ class AppWindow(QMainWindow):
         self._browser.load(QUrl(f"http://127.0.0.1:{PORT}"))
 
     def closeEvent(self, event) -> None:
-        # Daemon thread dies automatically; just accept.
         event.accept()
 
 
 def main() -> None:
+    workspace = resolve_workspace()
+    seed_workspace(workspace)
+
     app = QApplication(sys.argv)
     app.setApplicationName("Wargame Map Generator")
     app.setOrganizationName("Wargame Tools")
@@ -111,22 +180,18 @@ def main() -> None:
     window.show()
 
     ready = threading.Event()
-    server_thread = threading.Thread(target=start_flask, args=(ready,), daemon=True)
+    server_thread = threading.Thread(
+        target=start_flask, args=(workspace, ready), daemon=True
+    )
     server_thread.start()
 
-    def _on_ready() -> None:
-        # Give Flask one extra tick to finish binding before we load
-        QTimer.singleShot(200, window.load_app)
-
-    # Poll until the ready event is set, then hand off to Qt timer
     def _poll() -> None:
         if ready.is_set():
-            _on_ready()
+            QTimer.singleShot(200, window.load_app)
         else:
             QTimer.singleShot(100, _poll)
 
     QTimer.singleShot(100, _poll)
-
     sys.exit(app.exec())
 
 
