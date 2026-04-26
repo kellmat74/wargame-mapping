@@ -699,11 +699,16 @@ def calculate_adjacent_centers(
     col_spacing = 1.5 * size
     row_spacing = hex_size
 
-    # Offset between sheet centers (accounting for overlap)
-    # For short_edge: sheets side-by-side, share columns
-    # For long_edge: sheets stacked, share rows
-    x_offset = width_m - (overlap_hexes * col_spacing) if overlap_hexes > 0 else width_m
-    y_offset = height_m - (overlap_hexes * row_spacing) if overlap_hexes > 0 else height_m
+    # Offset between sheet centers (accounting for overlap).
+    # N shared columns means col (GRID_WIDTH-N) of sheet A aligns with col 0 of sheet B.
+    # That requires reducing center-to-center distance by 2*size (full hex width) for the first
+    # shared column, plus col_spacing for each additional one. Similarly for rows.
+    if overlap_hexes > 0:
+        x_offset = width_m - 2 * size - (overlap_hexes - 1) * col_spacing
+        y_offset = height_m - row_spacing / 2 - overlap_hexes * row_spacing
+    else:
+        x_offset = width_m
+        y_offset = height_m
 
     # Define sheet positions relative to cluster center (0,0)
     # Offsets are in "map space" (before rotation)
@@ -987,15 +992,18 @@ def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
     hex_size = base_config.hex_size_m
     col_spacing = 1.5 * hex_size / math.sqrt(3)
     row_spacing = hex_size
+    size_for_overlap = hex_size / math.sqrt(3)
+    x_overlap_m = 2 * size_for_overlap + (overlap_hexes - 1) * col_spacing
+    y_overlap_m = row_spacing / 2 + overlap_hexes * row_spacing
     if orientation == 'short_edge':
-        total_width_m = width_m * 2 - (overlap_hexes * col_spacing)
+        total_width_m = width_m * 2 - x_overlap_m
         total_height_m = height_m
     elif orientation == 'long_edge':
         total_width_m = width_m
-        total_height_m = height_m * 2 - (overlap_hexes * row_spacing)
+        total_height_m = height_m * 2 - y_overlap_m
     elif orientation == 'grid':
-        total_width_m = width_m * 2 - (overlap_hexes * col_spacing)
-        total_height_m = height_m * 2 - (overlap_hexes * row_spacing)
+        total_width_m = width_m * 2 - x_overlap_m
+        total_height_m = height_m * 2 - y_overlap_m
     else:
         total_width_m = width_m
         total_height_m = height_m

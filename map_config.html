@@ -2718,8 +2718,11 @@ config = MapConfig(
             const size = hexSizeM / Math.sqrt(3);
             const colSpacing = 1.5 * size;
             const rowSpacing = hexSizeM;
-            const xOffset = widthM - (overlapHexes * colSpacing);
-            const yOffset = heightM - (overlapHexes * rowSpacing);
+            // Correct overlap offset: N shared columns means col (GRID_WIDTH-N) of A aligns with col 0 of B.
+            // That requires reducing the center-to-center distance by 2*size (full hex width) for the first
+            // shared column, plus col_spacing for each additional one. Similarly for rows.
+            const xOffset = widthM - 2 * size - (overlapHexes - 1) * colSpacing;
+            const yOffset = heightM - rowSpacing / 2 - overlapHexes * rowSpacing;
 
             if (orientation === 'short_edge' && count === 2) {
                 return [
@@ -2757,9 +2760,9 @@ config = MapConfig(
             const colSpacing = 1.5 * size;
             const rowSpacing = hexSizeM;
 
-            // Offset between sheet centers (accounting for overlap)
-            const xOffset = widthM - (overlapHexes * colSpacing);
-            const yOffset = heightM - (overlapHexes * rowSpacing);
+            // Correct overlap offset: N shared columns means col (GRID_WIDTH-N) of A aligns with col 0 of B.
+            const xOffset = widthM - 2 * size - (overlapHexes - 1) * colSpacing;
+            const yOffset = heightM - rowSpacing / 2 - overlapHexes * rowSpacing;
 
             // Define sheet positions relative to cluster center (0,0)
             let positions = [];
