@@ -22,8 +22,8 @@ mgrs>=1.5.0
 # Web server
 flask>=3.0.0
 
-# Native window wrapper (packaging)
-PySide6>=6.6.0
+# System tray icon (packaging — single-instance + quit control)
+pystray>=0.19.0
 
 # HTTP requests (for tile downloads)
 requests>=2.31.0

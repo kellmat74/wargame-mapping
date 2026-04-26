@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Game Map Conversion</title>
+    <link rel="icon" href="/favicon.ico">
     <style>
         * {
             box-sizing: border-box;
@@ -24,39 +25,28 @@
             font-size: 24px;
         }
 
-        .header-row {
+        .nav-tabs {
             display: flex;
-            justify-content: space-between;
             align-items: center;
+            gap: 10px;
             margin-bottom: 20px;
         }
 
-        .restart-btn {
+        .nav-shutdown {
+            margin-left: auto;
             padding: 8px 16px;
-            background: #2d4a3e;
-            border: 1px solid #3d6a4e;
+            background: transparent;
+            border: 1px solid #7f1d1d;
             border-radius: 4px;
-            color: #8fbc8f;
-            font-size: 13px;
+            color: #ef4444;
+            font-size: 14px;
             cursor: pointer;
             transition: all 0.2s;
         }
 
-        .restart-btn:hover {
-            background: #3d6a4e;
-            border-color: #5a9a6a;
+        .nav-shutdown:hover {
+            background: #7f1d1d;
             color: #fff;
-        }
-
-        .restart-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .nav-tabs {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
         }
 
         .nav-tab {
@@ -468,15 +458,13 @@
 </head>
 <body>
     <div class="container">
-        <div class="header-row">
-            <h1>Wargame Map Generator</h1>
-            <button class="restart-btn" onclick="restartServer()" title="Restart server to pick up code changes">⟳ Restart Server</button>
-        </div>
+        <h1>Wargame Map Generator</h1>
 
         <div class="nav-tabs">
             <a href="/" class="nav-tab">Detailed Map</a>
             <a href="/game-map" class="nav-tab active">Game Map Conversion</a>
             <a href="/data-download" class="nav-tab">Data Download</a>
+            <button class="nav-shutdown" onclick="shutdownServer()">Shut Down</button>
         </div>
 
         <!-- Map Selection -->
@@ -704,47 +692,18 @@
         let selectedMap = null;
         let eventSource = null;
 
-        // Restart server to pick up code changes
-        async function restartServer() {
-            const btn = document.querySelector('.restart-btn');
-            const originalText = btn.textContent;
-            btn.disabled = true;
-            btn.textContent = 'Restarting...';
-
-            try {
-                await fetch('/api/restart', { method: 'POST' });
-            } catch (e) {
-                // Expected - server is shutting down
-            }
-
-            // Wait and try to reconnect
-            btn.textContent = 'Reconnecting...';
-            let attempts = 0;
-            const maxAttempts = 20;
-
-            const tryReconnect = async () => {
-                try {
-                    const response = await fetch('/api/available-maps');
-                    if (response.ok) {
-                        btn.textContent = originalText;
-                        btn.disabled = false;
-                        location.reload();
-                        return;
-                    }
-                } catch (e) {
-                    // Server not ready yet
-                }
-
-                attempts++;
-                if (attempts < maxAttempts) {
-                    setTimeout(tryReconnect, 500);
-                } else {
-                    btn.textContent = 'Restart failed';
-                    btn.disabled = false;
-                }
-            };
-
-            setTimeout(tryReconnect, 1000);
+        function shutdownServer() {
+            if (!confirm('Shut down the Wargame Map Generator server?')) return;
+            fetch('/api/shutdown', { method: 'POST' })
+                .catch(() => {})
+                .finally(() => {
+                    document.body.innerHTML =
+                        '<div style="background:#1a1f2e;color:#8b9dc3;font-family:sans-serif;' +
+                        'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+                        'height:100vh;margin:0;gap:12px;">' +
+                        '<p style="font-size:22px;color:#ef4444;margin:0;">Server stopped.</p>' +
+                        '<p style="font-size:15px;margin:0;">You can close this tab.</p></div>';
+                });
         }
 
         // Color presets

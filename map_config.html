@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tactical Map Configuration</title>
+    <link rel="icon" href="/favicon.ico">
     <!-- Leaflet.js for map preview -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
@@ -432,8 +433,26 @@
         /* Navigation tabs */
         .nav-tabs {
             display: flex;
+            align-items: center;
             gap: 10px;
             margin-bottom: 20px;
+        }
+
+        .nav-shutdown {
+            margin-left: auto;
+            padding: 8px 16px;
+            background: transparent;
+            border: 1px solid #7f1d1d;
+            border-radius: 4px;
+            color: #ef4444;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .nav-shutdown:hover {
+            background: #7f1d1d;
+            color: #fff;
         }
 
         .nav-tab {
@@ -623,6 +642,7 @@
             <a href="/" class="nav-tab active">Detailed Map</a>
             <a href="/game-map" class="nav-tab">Game Map Conversion</a>
             <a href="/data-download" class="nav-tab">Data Download</a>
+            <button class="nav-shutdown" onclick="shutdownServer()">Shut Down</button>
         </div>
 
         <!-- Instructions -->
@@ -833,7 +853,6 @@
                 <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
                 <button class="btn btn-success" id="generateBtn" onclick="generateMap()">Generate Map</button>
                 <button class="btn btn-secondary" onclick="resetToDefaults()">Reset</button>
-                <button class="btn btn-danger" id="stopServerBtn" onclick="stopServer()" style="display: none;">Stop Server</button>
                 <span id="versionLabel" style="margin-left: auto; font-size: 12px; color: #666; align-self: center;"></span>
             </div>
             <div class="region-info" style="margin-top: 15px;" id="serverModeHint">
@@ -1920,7 +1939,6 @@ config = MapConfig(
                     document.getElementById('serverStatus').innerHTML =
                         '<span style="color: #10b981;">Server connected</span> - Click "Generate Map" to create your map';
                     document.getElementById('generateBtn').disabled = false;
-                    document.getElementById('stopServerBtn').style.display = 'inline-block';
                     // Fetch and display version
                     fetch('/api/version')
                         .then(r => r.json())
@@ -1934,30 +1952,21 @@ config = MapConfig(
                     document.getElementById('serverStatus').innerHTML =
                         'To generate maps directly, run: <code style="background: #0d1b2a; padding: 2px 6px; border-radius: 3px;">python map_server.py</code>';
                     document.getElementById('generateBtn').disabled = true;
-                    document.getElementById('stopServerBtn').style.display = 'none';
                     document.getElementById('versionLabel').textContent = '';
                 });
         }
 
-        function stopServer() {
-            if (!confirm('Stop the map generator server?')) {
-                return;
-            }
-
+        function shutdownServer() {
+            if (!confirm('Shut down the Wargame Map Generator server?')) return;
             fetch('/api/shutdown', { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    showStatus('Server stopped. Close this tab or restart with: python map_server.py', 'info');
-                    document.getElementById('serverStatus').innerHTML =
-                        '<span style="color: #ef4444;">Server stopped</span> - Restart with: <code style="background: #0d1b2a; padding: 2px 6px; border-radius: 3px;">python map_server.py</code>';
-                    document.getElementById('generateBtn').disabled = true;
-                    document.getElementById('stopServerBtn').style.display = 'none';
-                    serverAvailable = false;
-                })
-                .catch(error => {
-                    // Server may have already stopped
-                    showStatus('Server stopped', 'info');
-                    serverAvailable = false;
+                .catch(() => {})
+                .finally(() => {
+                    document.body.innerHTML =
+                        '<div style="background:#1a1f2e;color:#8b9dc3;font-family:sans-serif;' +
+                        'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+                        'height:100vh;margin:0;gap:12px;">' +
+                        '<p style="font-size:22px;color:#ef4444;margin:0;">Server stopped.</p>' +
+                        '<p style="font-size:15px;margin:0;">You can close this tab.</p></div>';
                 });
         }
 

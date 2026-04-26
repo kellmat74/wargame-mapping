@@ -50,6 +50,23 @@ from region_registry import (
 app = Flask(__name__)
 
 
+def _assets_dir() -> Path:
+    """Locate the assets directory whether frozen or in dev."""
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS) / 'assets'
+    return Path(__file__).parent / 'assets'
+
+
+@app.route('/favicon.ico')
+def favicon():
+    assets = _assets_dir()
+    for name in ('icon.ico', 'icon.icns', 'icon.png'):
+        p = assets / name
+        if p.exists():
+            return send_file(str(p))
+    return '', 204
+
+
 def read_generator_version(version_file: Optional[Path] = None) -> str:
     """Read VERSION constant from tactical_map.py without importing it."""
     target = version_file or (Path(__file__).parent / "tactical_map.py")

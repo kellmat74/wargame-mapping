@@ -80,6 +80,9 @@ a = Analysis(
         'sklearn',
         # MGRS
         'mgrs',
+        # System tray
+        'pystray',
+        'PIL',
     ],
     hookspath=[],
     hooksconfig={},
@@ -128,7 +131,7 @@ if sys.platform == 'darwin':
         info_plist={
             'NSHighResolutionCapable': True,
             'NSRequiresAquaSystemAppearance': False,
-            'CFBundleShortVersionString': '3.0.1',
+            'CFBundleShortVersionString': '3.1.0',
         },
     )
 

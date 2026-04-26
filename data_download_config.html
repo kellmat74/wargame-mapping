@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Geofabrik Data Download</title>
+    <link rel="icon" href="/favicon.ico">
     <style>
         * {
             box-sizing: border-box;
@@ -26,8 +27,26 @@
 
         .nav-tabs {
             display: flex;
+            align-items: center;
             gap: 10px;
             margin-bottom: 20px;
+        }
+
+        .nav-shutdown {
+            margin-left: auto;
+            padding: 8px 16px;
+            background: transparent;
+            border: 1px solid #7f1d1d;
+            border-radius: 4px;
+            color: #ef4444;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .nav-shutdown:hover {
+            background: #7f1d1d;
+            color: #fff;
         }
 
         .nav-tab {
@@ -339,6 +358,7 @@
             <a href="/" class="nav-tab">Detailed Map</a>
             <a href="/game-map" class="nav-tab">Game Map Conversion</a>
             <a href="/data-download" class="nav-tab active">Data Download</a>
+            <button class="nav-shutdown" onclick="shutdownServer()">Shut Down</button>
         </div>
 
         <!-- Download Panel -->
@@ -832,6 +852,20 @@
         // ============================================
         // Initialize on load
         // ============================================
+
+        function shutdownServer() {
+            if (!confirm('Shut down the Wargame Map Generator server?')) return;
+            fetch('/api/shutdown', { method: 'POST' })
+                .catch(() => {})
+                .finally(() => {
+                    document.body.innerHTML =
+                        '<div style="background:#1a1f2e;color:#8b9dc3;font-family:sans-serif;' +
+                        'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+                        'height:100vh;margin:0;gap:12px;">' +
+                        '<p style="font-size:22px;color:#ef4444;margin:0;">Server stopped.</p>' +
+                        '<p style="font-size:15px;margin:0;">You can close this tab.</p></div>';
+                });
+        }
 
         init();
     </script>

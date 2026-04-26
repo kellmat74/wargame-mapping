@@ -1,19 +1,24 @@
 """
-Wargame Map Generator — native window entry point.
+Wargame Map Generator — desktop launcher.
 
-Starts the Flask server in a background thread and displays it inside a
-PySide6 QWebEngineView so users get a double-click app with no terminal.
+Three layers of server lifecycle management:
+  1. Single-instance: if port 8080 already bound, open browser and exit.
+  2. System tray icon (pystray) with Open / Quit — always visible while running.
+  3. In-browser Shut Down button — calls /api/shutdown, shows a "you can close
+     this tab" overlay (window.close() is blocked by browsers for regular tabs).
 
-Also serves as the frozen subprocess dispatcher: when PyInstaller bundles
-the app, all child-process calls route through this file via --run <module>
-instead of trying to exec .py files directly.
+Also serves as the frozen subprocess dispatcher: when PyInstaller bundles the
+app, all child-process calls route through this file via --run <module> instead
+of trying to exec .py files directly.
 """
 
 import json
 import os
 import shutil
+import socket
 import sys
 import threading
+import webbrowser
 from pathlib import Path
 
 
@@ -49,19 +54,15 @@ if getattr(sys, 'frozen', False) and '--run' in sys.argv:
 
 
 # ---------------------------------------------------------------------------
-# Normal (windowed) startup
+# Constants
 # ---------------------------------------------------------------------------
-from PySide6.QtWidgets import QApplication, QMainWindow
-from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import QWebEngineSettings
-from PySide6.QtCore import QUrl, QTimer
-from PySide6.QtGui import QIcon
-
-
 PORT = 8080
 PREFS_FILE = Path.home() / '.wargame_map_prefs.json'
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 def bundle_dir() -> Path:
     """Directory where the app's code and assets live (read-only when frozen)."""
     if getattr(sys, 'frozen', False):
@@ -81,7 +82,6 @@ def save_prefs(prefs: dict) -> None:
 
 
 def default_workspace() -> Path:
-    """Default workspace location for a packaged install."""
     return Path.home() / 'Documents' / 'Wargame Maps'
 
 
@@ -91,14 +91,10 @@ def resolve_workspace() -> Path:
     workspace = Path(prefs['workspace']) if 'workspace' in prefs else None
 
     if workspace is None:
-        if getattr(sys, 'frozen', False):
-            workspace = default_workspace()
-        else:
-            workspace = bundle_dir()  # dev mode: use project root
+        workspace = default_workspace() if getattr(sys, 'frozen', False) else bundle_dir()
 
     workspace.mkdir(parents=True, exist_ok=True)
 
-    # Persist if this is the first time we're setting it
     if 'workspace' not in prefs:
         prefs['workspace'] = str(workspace)
         save_prefs(prefs)
@@ -112,7 +108,6 @@ def seed_workspace(workspace: Path) -> None:
     if not sample_src.exists():
         return
 
-    # Copy data/ tree
     src_data = sample_src / 'data'
     if src_data.exists():
         dst_data = workspace / 'data'
@@ -121,15 +116,23 @@ def seed_workspace(workspace: Path) -> None:
             dst = dst_data / rel
             if item.is_dir():
                 dst.mkdir(parents=True, exist_ok=True)
-            elif not dst.exists():  # never overwrite user data
+            elif not dst.exists():
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(item, dst)
 
-    # Drop in a starter map_config.json only if one doesn't exist
     src_config = sample_src / 'map_config.json'
     dst_config = workspace / 'map_config.json'
     if src_config.exists() and not dst_config.exists():
         shutil.copy2(src_config, dst_config)
+
+
+def is_port_open(port: int) -> bool:
+    """Return True if something is already listening on localhost:port."""
+    try:
+        with socket.create_connection(('127.0.0.1', port), timeout=0.5):
+            return True
+    except OSError:
+        return False
 
 
 def start_flask(workspace: Path, ready_event: threading.Event) -> None:
@@ -140,59 +143,68 @@ def start_flask(workspace: Path, ready_event: threading.Event) -> None:
     map_server.app.run(host='127.0.0.1', port=PORT, debug=False, use_reloader=False)
 
 
-class AppWindow(QMainWindow):
-    def __init__(self) -> None:
-        super().__init__()
-        self.setWindowTitle("Wargame Map Generator")
-        self.resize(1440, 900)
-
-        icon_path = bundle_dir() / 'assets' / 'icon.icns'
-        if icon_path.exists():
-            self.setWindowIcon(QIcon(str(icon_path)))
-
-        self._browser = QWebEngineView()
-        self._browser.settings().setAttribute(
-            QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True
-        )
-        self.setCentralWidget(self._browser)
-        self._browser.setHtml(
-            "<body style='background:#1a1f2e;color:#8b9dc3;font-family:sans-serif;"
-            "display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
-            "<p style='font-size:18px'>Starting Wargame Map Generator…</p></body>"
-        )
-
-    def load_app(self) -> None:
-        self._browser.load(QUrl(f"http://127.0.0.1:{PORT}"))
-
-    def closeEvent(self, event) -> None:
-        event.accept()
+def make_tray_image():
+    """Return a PIL Image for the system tray icon."""
+    from PIL import Image, ImageDraw
+    # icon_tray.png is pre-rendered with a white backing for menu bar visibility
+    for name in ('icon_tray.png', 'icon.png', 'icon.icns'):
+        p = bundle_dir() / 'assets' / name
+        if p.exists():
+            try:
+                return Image.open(p).convert('RGBA').resize((64, 64), Image.LANCZOS)
+            except Exception:
+                pass
+    # Fallback: bright white circle so it's always visible
+    img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+    ImageDraw.Draw(img).ellipse([4, 4, 59, 59], fill=(200, 220, 255, 255))
+    return img
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 def main() -> None:
+    # 1. Single-instance: if the server is already up, just open the browser
+    if is_port_open(PORT):
+        webbrowser.open(f'http://127.0.0.1:{PORT}')
+        return
+
     workspace = resolve_workspace()
     seed_workspace(workspace)
 
-    app = QApplication(sys.argv)
-    app.setApplicationName("Wargame Map Generator")
-    app.setOrganizationName("Wargame Tools")
-
-    window = AppWindow()
-    window.show()
-
+    # 2. Start Flask in a daemon thread
     ready = threading.Event()
     server_thread = threading.Thread(
         target=start_flask, args=(workspace, ready), daemon=True
     )
     server_thread.start()
 
-    def _poll() -> None:
-        if ready.is_set():
-            QTimer.singleShot(200, window.load_app)
-        else:
-            QTimer.singleShot(100, _poll)
+    # Wait for Flask to bind (up to 10 s) then open the browser
+    ready.wait(timeout=10)
+    webbrowser.open(f'http://127.0.0.1:{PORT}')
 
-    QTimer.singleShot(100, _poll)
-    sys.exit(app.exec())
+    # 3. System tray icon — blocks the main thread until Quit is chosen
+    import pystray
+
+    icon_image = make_tray_image()
+
+    def on_open(icon, item):
+        webbrowser.open(f'http://127.0.0.1:{PORT}')
+
+    def on_quit(icon, item):
+        icon.stop()
+        os._exit(0)  # daemon thread (Flask) dies with the process
+
+    tray = pystray.Icon(
+        'Wargame Map Generator',
+        icon_image,
+        'Wargame Map Generator',
+        menu=pystray.Menu(
+            pystray.MenuItem('Open', on_open),
+            pystray.MenuItem('Quit', on_quit),
+        ),
+    )
+    tray.run()
 
 
 if __name__ == '__main__':
