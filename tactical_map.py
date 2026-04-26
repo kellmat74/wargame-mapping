@@ -3580,35 +3580,7 @@ def render_tactical_svg(
             print(f"    Rendered {count} dams")
 
         # Places (settlement names)
-        places = enhanced_features.get('places')
-        if places is not None and not places.empty:
-            print("  Rendering place names...")
-            count = 0
-            for _, row in places.iterrows():
-                geom = row.geometry
-                if geom is None or geom.geom_type != 'Point':
-                    continue
-                name = row.get('name', '')
-                if not name:
-                    continue
-                place_type = row.get('place', 'village')
-                svg_x, svg_y = to_svg(geom.x, geom.y)
-
-                # Scale font size by place importance
-                size_scale = {'city': 1.5, 'town': 1.2, 'village': 1.0, 'hamlet': 0.8}.get(place_type, 0.8)
-                font_size = place_label_size_scaled * size_scale
-
-                layer_places.add(dwg.text(
-                    name,
-                    insert=(svg_x, svg_y),
-                    text_anchor="middle",
-                    font_size=font_size,
-                    fill=PLACE_LABEL_COLOR,
-                    font_family="sans-serif",
-                    font_weight="bold" if place_type in ('city', 'town') else "normal",
-                ))
-                count += 1
-            print(f"    Rendered {count} place names")
+        # Place names intentionally omitted — too cluttered on tactical maps
 
         # Peaks
         peaks = enhanced_features.get('peaks')
