@@ -851,10 +851,27 @@
             <h2>Generate</h2>
             <div class="button-row">
                 <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+                <button class="btn btn-secondary" onclick="toggleConfigPicker()" id="loadConfigBtn">Load Config...</button>
                 <button class="btn btn-success" id="generateBtn" onclick="generateMap()">Generate Map</button>
                 <button class="btn btn-secondary" onclick="resetToDefaults()">Reset</button>
                 <span id="versionLabel" style="margin-left: auto; font-size: 12px; color: #666; align-self: center;"></span>
             </div>
+            <!-- Config picker (revealed by Load Config... button) -->
+            <div id="configPicker" style="display:none; margin-top: 12px; padding: 12px;
+                 background: #0d1b2a; border: 1px solid #0f3460; border-radius: 4px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <select id="configPickerSelect" style="flex: 1; background: #16213e;
+                            border: 1px solid #0f3460; border-radius: 4px; color: #eee;
+                            padding: 6px 10px; font-size: 13px;">
+                        <option value="">Loading maps…</option>
+                    </select>
+                    <button class="btn btn-primary" onclick="applySelectedConfig()"
+                            style="white-space: nowrap;">Load Selected</button>
+                    <button class="btn btn-secondary" onclick="toggleConfigPicker()"
+                            style="white-space: nowrap;">Cancel</button>
+                </div>
+            </div>
+
             <div class="region-info" style="margin-top: 15px;" id="serverModeHint">
                 <span id="serverStatus">Checking server...</span>
             </div>
@@ -1874,6 +1891,99 @@ config = MapConfig(
             navigator.clipboard.writeText(output.textContent).then(() => {
                 showStatus('Copied to clipboard!', 'success');
             });
+        }
+
+        async function toggleConfigPicker() {
+            const picker = document.getElementById('configPicker');
+            const isOpen = picker.style.display !== 'none';
+            picker.style.display = isOpen ? 'none' : 'block';
+            if (!isOpen) {
+                // Populate the dropdown from the maps list
+                const sel = document.getElementById('configPickerSelect');
+                sel.innerHTML = '<option value="">Loading…</option>';
+                try {
+                    const resp = await fetch('/api/detailed-maps');
+                    const data = await resp.json();
+                    const maps = data.maps || [];
+                    if (maps.length === 0) {
+                        sel.innerHTML = '<option value="">No generated maps found</option>';
+                    } else {
+                        sel.innerHTML = maps.map(m => {
+                            const sheets = m.sheet_count > 1 ? ` (${m.sheet_count} sheets)` : '';
+                            const label = [m.country, m.name + sheets, m.version]
+                                .filter(Boolean).join(' / ');
+                            return `<option value="${m.path}">${label}</option>`;
+                        }).join('');
+                    }
+                } catch (e) {
+                    sel.innerHTML = '<option value="">Failed to load map list</option>';
+                }
+            }
+        }
+
+        async function applySelectedConfig() {
+            const path = document.getElementById('configPickerSelect').value;
+            if (!path) return;
+            try {
+                const response = await fetch('/api/config?path=' + encodeURIComponent(path));
+                if (response.status === 404) {
+                    showStatus('No map_config.json found for that map.', 'warning');
+                    return;
+                }
+                if (!response.ok) throw new Error('Server error');
+                const cfg = await response.json();
+                applyConfig(cfg);
+                document.getElementById('configPicker').style.display = 'none';
+                showStatus('Config loaded from ' + (cfg.name || 'selected map') + '.', 'success');
+            } catch (err) {
+                showStatus('Failed to load config: ' + err.message, 'warning');
+            }
+        }
+
+        function applyConfig(cfg) {
+            if (cfg.name) {
+                state.mapName = cfg.name;
+                document.getElementById('mapName').value = cfg.name;
+            }
+
+            if (cfg.center_lat != null && cfg.center_lon != null) {
+                state.centerLat = cfg.center_lat;
+                state.centerLon = cfg.center_lon;
+                document.getElementById('coordPaste').value =
+                    `${cfg.center_lat.toFixed(6)}, ${cfg.center_lon.toFixed(6)}`;
+            }
+
+            if (cfg.region) {
+                state.region = cfg.region;
+            }
+
+            if (cfg.rotation_deg != null) {
+                state.bearingAtTop = -cfg.rotation_deg;
+                document.getElementById('rotationSlider').value = state.bearingAtTop;
+                document.getElementById('rotationValue').textContent = state.bearingAtTop;
+            }
+
+            if (cfg.multi_map?.enabled) {
+                const count = cfg.multi_map.count || 1;
+                const orientation = cfg.multi_map.orientation || 'short_edge';
+                state.multiMap = { enabled: true, count, orientation };
+                document.querySelectorAll('.layout-option').forEach(opt => {
+                    const match = parseInt(opt.dataset.count) === count &&
+                                  opt.dataset.orientation === orientation;
+                    opt.classList.toggle('selected', match);
+                    if (match) opt.querySelector('input').checked = true;
+                });
+            } else {
+                state.multiMap = { enabled: false, count: 1, orientation: 'single' };
+                document.querySelectorAll('.layout-option').forEach(opt => {
+                    const match = parseInt(opt.dataset.count) === 1;
+                    opt.classList.toggle('selected', match);
+                    if (match) opt.querySelector('input').checked = true;
+                });
+            }
+
+            updateDisplay();
+            updatePreviewBoundary();
         }
 
         function resetToDefaults() {

@@ -50,8 +50,8 @@ fi
 echo "Starting server..."
 echo "Browser will open to http://localhost:8080"
 echo ""
-echo "Use the 'Restart Server' button in the browser if needed,"
-echo "or close this window to stop the server."
+echo "Use the 'Shut Down' button in the browser to stop the server,"
+echo "or close this terminal window."
 echo ""
 echo "========================================"
 echo ""
@@ -59,11 +59,13 @@ echo ""
 python map_server.py
 EXIT_CODE=$?
 
-# Show appropriate message based on exit
-echo ""
-if [ $EXIT_CODE -eq 0 ]; then
-    echo "Server stopped. You can close this window."
+# Exit code 143 = SIGTERM (clean shutdown via browser button)
+# Exit code 0   = normal stop
+# Anything else = real error — leave window open so you can read it
+if [ $EXIT_CODE -eq 0 ] || [ $EXIT_CODE -eq 143 ]; then
+    osascript -e 'tell application "Terminal" to close front window' &
 else
+    echo ""
     echo "Server exited with an error (code: $EXIT_CODE)."
     echo "Check the output above for details."
 fi
