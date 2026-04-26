@@ -944,6 +944,13 @@
                             <input type="number" id="mgrsGridInterval" step="100" value="1000">
                             <div class="region-info">Grid line interval</div>
                         </div>
+                        <div class="input-field" style="flex: 0 0 auto; align-self: flex-end; padding-bottom: 6px;">
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                <input type="checkbox" id="showMgrsGrid" checked style="width:14px;height:14px;accent-color:#00d4ff;">
+                                Show MGRS Grid
+                            </label>
+                            <div class="region-info" id="mgrsGridAutoNote" style="display:none;color:#f59e0b;">Auto-off above 750m hexes</div>
+                        </div>
                     </div>
                 </div>
 
@@ -1982,6 +1989,15 @@ config = MapConfig(
                 });
             }
 
+            // Restore MGRS grid toggle
+            const hexSize = cfg.hex_size_m || 250;
+            const autoOff = hexSize > 750;
+            const cb = document.getElementById('showMgrsGrid');
+            const note = document.getElementById('mgrsGridAutoNote');
+            cb.checked = autoOff ? false : (cfg.show_mgrs_grid !== false);
+            cb.disabled = autoOff;
+            note.style.display = autoOff ? 'block' : 'none';
+
             updateDisplay();
             updatePreviewBoundary();
         }
@@ -2125,6 +2141,9 @@ config = MapConfig(
             // Add contour intervals
             config.contour_interval = parseInt(document.getElementById('contourInterval').value) || 20;
             config.index_contour_interval = parseInt(document.getElementById('indexContourInterval').value) || 100;
+
+            // MGRS grid toggle
+            config.show_mgrs_grid = document.getElementById('showMgrsGrid').checked;
 
             // Show progress container
             const progressContainer = document.getElementById('progressContainer');
@@ -2757,6 +2776,13 @@ config = MapConfig(
             // Debounce to avoid too many updates while typing
             clearTimeout(window.hexSizeDebounce);
             window.hexSizeDebounce = setTimeout(updatePreviewBoundary, 300);
+            // Auto-manage MGRS checkbox
+            const hexSize = parseFloat(e.target.value) || 250;
+            const autoOff = hexSize > 750;
+            const cb = document.getElementById('showMgrsGrid');
+            const note = document.getElementById('mgrsGridAutoNote');
+            if (autoOff) { cb.checked = false; cb.disabled = true; note.style.display = 'block'; }
+            else          { cb.disabled = false; note.style.display = 'none'; }
         });
     </script>
 </body>

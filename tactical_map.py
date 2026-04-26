@@ -412,6 +412,7 @@ class MapConfig:
     hex_size_m: float = 250  # Hex size in meters (flat edge to flat edge)
     contour_interval: float = 20  # Contour line interval in meters
     index_contour_interval: float = 100  # Index (bold) contour interval in meters
+    show_mgrs_grid: bool = True  # Render the 1km MGRS grid overlay
 
     # Computed values (set by calculate_bounds)
     center_x: float = 0
@@ -2252,6 +2253,10 @@ def generate_mgrs_grid(config: MapConfig) -> dict:
     Returns empty dict when hex_size_m > 750 — at that scale the 1km MGRS
     grid would be denser than the hexes and just adds visual noise.
     """
+    if not config.show_mgrs_grid:
+        print(f"\nSkipping MGRS grid (disabled in config)")
+        return {}
+
     if config.hex_size_m > 750:
         print(f"\nSkipping MGRS grid (hex size {config.hex_size_m}m > 750m threshold)")
         return {}
@@ -5035,6 +5040,7 @@ def load_config_from_file() -> Optional[Tuple[MapConfig, Optional[dict]]]:
         hex_size_m=data.get("hex_size_m", HEX_SIZE_M),  # Falls back to global default
         contour_interval=data.get("contour_interval", CONTOUR_INTERVAL),
         index_contour_interval=data.get("index_contour_interval", INDEX_CONTOUR_INTERVAL),
+        show_mgrs_grid=data.get("show_mgrs_grid", True),
     )
 
     # Extract multi_map settings if present
