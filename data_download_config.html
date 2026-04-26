@@ -348,6 +348,98 @@
         .selection-summary strong {
             color: #00d4ff;
         }
+
+        /* Settings panel */
+        .settings-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            user-select: none;
+            color: #aaa;
+            font-size: 13px;
+        }
+
+        .settings-toggle:hover {
+            color: #00d4ff;
+        }
+
+        .settings-toggle .caret {
+            font-size: 10px;
+            transition: transform 0.2s;
+        }
+
+        .settings-toggle.open .caret {
+            transform: rotate(90deg);
+        }
+
+        .settings-body {
+            display: none;
+            margin-top: 15px;
+        }
+
+        .settings-body.open {
+            display: block;
+        }
+
+        .path-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .path-row label {
+            width: 90px;
+            flex-shrink: 0;
+            font-size: 12px;
+            color: #aaa;
+            text-transform: uppercase;
+        }
+
+        .path-value {
+            flex: 1;
+            padding: 8px 10px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            background: #0a0a15;
+            color: #ccc;
+            font-size: 13px;
+            font-family: 'Monaco', 'Menlo', monospace;
+        }
+
+        .path-value.editable {
+            background: #1a1a2e;
+            color: #fff;
+            border-color: #0f3460;
+            outline: none;
+        }
+
+        .path-value.editable:focus {
+            border-color: #00d4ff;
+        }
+
+        .path-value.readonly {
+            color: #666;
+            cursor: default;
+        }
+
+        .settings-notice {
+            font-size: 12px;
+            color: #f59e0b;
+            margin-top: 4px;
+            display: none;
+        }
+
+        .settings-notice.visible {
+            display: block;
+        }
+
+        .settings-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
     </style>
 </head>
 <body>
@@ -419,6 +511,37 @@
             <div id="downloadedList" class="region-list">
                 <div class="empty-state">
                     <p>Loading...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Panel -->
+        <div class="panel">
+            <div class="settings-toggle" id="settingsToggle" onclick="toggleSettings()">
+                <span class="caret">&#9658;</span>
+                <h2 style="margin:0;font-size:16px;">Settings</h2>
+            </div>
+            <div class="settings-body" id="settingsBody">
+                <div class="path-row" style="margin-top:15px;">
+                    <label>Workspace</label>
+                    <input type="text" class="path-value editable" id="workspaceInput" placeholder="/path/to/workspace" oninput="onWorkspaceInput()" />
+                    <button class="btn btn-secondary btn-small" onclick="browseWorkspace()">Browse…</button>
+                </div>
+                <div class="path-row">
+                    <label>Data</label>
+                    <div class="path-value readonly" id="dataDirDisplay"></div>
+                </div>
+                <div class="path-row">
+                    <label>Output</label>
+                    <div class="path-value readonly" id="outputDirDisplay"></div>
+                </div>
+                <div class="settings-notice" id="settingsNotice">
+                    &#9888; Restart required for the new workspace to take effect.
+                </div>
+                <div class="settings-actions">
+                    <button class="btn btn-primary btn-small" onclick="saveSettings()">Save</button>
+                    <button class="btn btn-secondary btn-small" onclick="cancelSettings()">Cancel</button>
+                    <span id="settingsSaveStatus" style="font-size:12px;color:#4CAF50;align-self:center;display:none;">Saved.</span>
                 </div>
             </div>
         </div>
@@ -852,6 +975,88 @@
         // ============================================
         // Initialize on load
         // ============================================
+
+        // ============================================
+        // Settings
+        // ============================================
+
+        let _originalWorkspace = '';
+
+        function toggleSettings() {
+            const toggle = document.getElementById('settingsToggle');
+            const body = document.getElementById('settingsBody');
+            const isOpen = body.classList.contains('open');
+            toggle.classList.toggle('open', !isOpen);
+            body.classList.toggle('open', !isOpen);
+            if (!isOpen) loadSettings();
+        }
+
+        async function loadSettings() {
+            try {
+                const res = await fetch('/api/settings');
+                const data = await res.json();
+                _originalWorkspace = data.workspace;
+                document.getElementById('workspaceInput').value = data.workspace;
+                document.getElementById('dataDirDisplay').textContent = data.data_dir;
+                document.getElementById('outputDirDisplay').textContent = data.output_dir;
+                document.getElementById('settingsNotice').classList.remove('visible');
+                document.getElementById('settingsSaveStatus').style.display = 'none';
+            } catch (e) {
+                console.error('Failed to load settings:', e);
+            }
+        }
+
+        function onWorkspaceInput() {
+            const val = document.getElementById('workspaceInput').value.trim();
+            // Update the derived path previews live
+            document.getElementById('dataDirDisplay').textContent = val ? val + '/data' : '';
+            document.getElementById('outputDirDisplay').textContent = val ? val + '/output' : '';
+            const changed = val !== _originalWorkspace;
+            document.getElementById('settingsNotice').classList.toggle('visible', changed);
+            document.getElementById('settingsSaveStatus').style.display = 'none';
+        }
+
+        async function browseWorkspace() {
+            try {
+                const res = await fetch('/api/settings/browse', { method: 'POST' });
+                const data = await res.json();
+                if (data.path) {
+                    document.getElementById('workspaceInput').value = data.path;
+                    onWorkspaceInput();
+                }
+            } catch (e) {
+                console.error('Browse failed:', e);
+            }
+        }
+
+        async function saveSettings() {
+            const workspace = document.getElementById('workspaceInput').value.trim();
+            if (!workspace) return;
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ workspace }),
+                });
+                const data = await res.json();
+                if (data.error) {
+                    alert('Could not save: ' + data.error);
+                    return;
+                }
+                _originalWorkspace = workspace;
+                document.getElementById('settingsSaveStatus').style.display = 'inline';
+            } catch (e) {
+                alert('Save failed: ' + e.message);
+            }
+        }
+
+        function cancelSettings() {
+            document.getElementById('workspaceInput').value = _originalWorkspace;
+            document.getElementById('dataDirDisplay').textContent = _originalWorkspace ? _originalWorkspace + '/data' : '';
+            document.getElementById('outputDirDisplay').textContent = _originalWorkspace ? _originalWorkspace + '/output' : '';
+            document.getElementById('settingsNotice').classList.remove('visible');
+            document.getElementById('settingsSaveStatus').style.display = 'none';
+        }
 
         function shutdownServer() {
             if (!confirm('Shut down the Wargame Map Generator server?')) return;

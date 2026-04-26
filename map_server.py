@@ -134,6 +134,23 @@ def index():
     return send_file('map_config.html')
 
 
+@app.route('/api/config', methods=['GET'])
+def load_config():
+    """Load map_config.json — from a specific map directory if ?path= given,
+    otherwise from the workspace root."""
+    map_path = request.args.get('path')
+    if map_path:
+        config_path = Path(map_path) / 'map_config.json'
+    else:
+        config_path = Path(__file__).parent / 'map_config.json'
+    if not config_path.exists():
+        return jsonify({}), 404
+    try:
+        return jsonify(json.loads(config_path.read_text()))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/config', methods=['POST'])
 def save_config():
     """Save configuration to map_config.json."""
@@ -494,43 +511,65 @@ def list_detailed_maps():
     """List available detailed maps for conversion."""
     try:
         output_dir = Path(__file__).parent / 'output'
+        seen_dirs = set()
         maps = []
 
         if output_dir.exists():
-            # Scan recursively for any directory containing a hexdata.json + tactical.svg pair
             for hexdata_file in sorted(output_dir.rglob('*_hexdata.json')):
                 candidate_dir = hexdata_file.parent
+
+                # Skip directories already recorded (multi-sheet runs have multiple hexdata files)
+                if candidate_dir in seen_dirs:
+                    continue
+                seen_dirs.add(candidate_dir)
+
                 svg_files = list(candidate_dir.glob('*_tactical.svg'))
                 if not svg_files:
                     continue
 
-                with open(hexdata_file) as f:
-                    metadata = json.load(f).get('metadata', {})
-
-                # Determine version and map name from path structure.
-                # The immediate parent is either a version folder (timestamp) or the map folder itself.
-                parent = candidate_dir
-                rel = parent.relative_to(output_dir)
-                parts = rel.parts  # e.g. ('Europe', 'Germany', 'Hessen', 'Fulda', '2026-...')
+                rel = candidate_dir.relative_to(output_dir)
+                parts = rel.parts  # e.g. ('Europe', 'Germany', 'Hessen', 'Friedberg', '2026-...')
 
                 if len(parts) >= 2:
                     version = parts[-1]
                     name = parts[-2]
-                    # Rejoin everything above the map name as the region display path
                     country = ' / '.join(parts[:-2]) if len(parts) > 2 else parts[0]
                 else:
                     version = None
                     name = parts[0] if parts else candidate_dir.name
                     country = ''
 
+                # Multi-sheet runs have a cluster_metadata.json — use it for accurate metadata
+                cluster_file = candidate_dir / 'cluster_metadata.json'
+                sheet_count = 1
+                center_lat = center_lon = None
+                if cluster_file.exists():
+                    try:
+                        cm = json.loads(cluster_file.read_text())
+                        sheet_count = cm.get('count', 1)
+                        center_lat = cm['cluster_center']['lat']
+                        center_lon = cm['cluster_center']['lon']
+                    except Exception:
+                        pass
+
+                if center_lat is None:
+                    # Fall back to first hexdata file metadata
+                    try:
+                        with open(hexdata_file) as f:
+                            meta = json.load(f).get('metadata', {})
+                        center_lat = meta.get('center_lat')
+                        center_lon = meta.get('center_lon')
+                    except Exception:
+                        pass
+
                 maps.append({
                     'path': str(candidate_dir),
                     'country': country,
                     'name': name,
                     'version': version,
-                    'render_version': metadata.get('version'),
-                    'center_lat': metadata.get('center_lat'),
-                    'center_lon': metadata.get('center_lon'),
+                    'sheet_count': sheet_count,
+                    'center_lat': center_lat,
+                    'center_lon': center_lon,
                     'has_game_map': (candidate_dir / 'game_map').exists()
                 })
 
@@ -1110,6 +1149,82 @@ def get_geofabrik_status():
             'error': geofabrik_status['error'],
             'region': geofabrik_status['region'],
         })
+
+
+_PREFS_FILE = Path.home() / '.wargame_map_prefs.json'
+
+
+def _load_prefs() -> dict:
+    try:
+        return json.loads(_PREFS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _save_prefs(prefs: dict) -> None:
+    _PREFS_FILE.write_text(json.dumps(prefs, indent=2))
+
+
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    """Return current workspace path and derived data/output paths."""
+    prefs = _load_prefs()
+    workspace = prefs.get('workspace', str(Path(__file__).parent))
+    ws = Path(workspace)
+    return jsonify({
+        'workspace': workspace,
+        'data_dir': str(ws / 'data'),
+        'output_dir': str(ws / 'output'),
+        'writable': os.access(workspace, os.W_OK) if ws.exists() else False,
+    })
+
+
+@app.route('/api/settings', methods=['POST'])
+def save_settings():
+    """Persist a new workspace path to the prefs file."""
+    body = request.get_json(silent=True) or {}
+    new_workspace = body.get('workspace', '').strip()
+    if not new_workspace:
+        return jsonify({'error': 'workspace path is required'}), 400
+
+    p = Path(new_workspace)
+    if not p.exists():
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            return jsonify({'error': f'Could not create directory: {e}'}), 400
+
+    if not os.access(str(p), os.W_OK):
+        return jsonify({'error': 'Directory is not writable'}), 400
+
+    prefs = _load_prefs()
+    prefs['workspace'] = str(p)
+    _save_prefs(prefs)
+    return jsonify({'ok': True, 'workspace': str(p)})
+
+
+@app.route('/api/settings/browse', methods=['POST'])
+def browse_folder():
+    """Open a native macOS folder picker and return the chosen path."""
+    import platform
+    if platform.system() != 'Darwin':
+        return jsonify({'error': 'Browse not supported on this platform'}), 400
+    try:
+        import subprocess as sp
+        script = (
+            'tell application "System Events"\n'
+            '    activate\n'
+            '    set chosen to choose folder with prompt "Select workspace folder:"\n'
+            '    return POSIX path of chosen\n'
+            'end tell'
+        )
+        result = sp.run(['osascript', '-e', script], capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            return jsonify({'cancelled': True})
+        path = result.stdout.strip().rstrip('/')
+        return jsonify({'path': path})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':
