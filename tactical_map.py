@@ -2248,7 +2248,14 @@ def generate_mgrs_grid(config: MapConfig) -> dict:
         - vertical_lines: list of (x_utm, y_start, y_end) for N-S lines
         - horizontal_lines: list of (y_utm, x_start, x_end) for E-W lines
         - labels: list of (x, y, text, orientation) for grid labels
+
+    Returns empty dict when hex_size_m > 750 — at that scale the 1km MGRS
+    grid would be denser than the hexes and just adds visual noise.
     """
+    if config.hex_size_m > 750:
+        print(f"\nSkipping MGRS grid (hex size {config.hex_size_m}m > 750m threshold)")
+        return {}
+
     print(f"\nGenerating MGRS grid (UTM zone: {config.utm_crs})...")
 
     # Transform data bounds to UTM (uses expanded bounds for rotation)
