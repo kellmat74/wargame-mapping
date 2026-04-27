@@ -686,161 +686,192 @@ def get_map_config_bounds(config_path: Path) -> Optional[Tuple[float, float, flo
         return None
 
 
-def download_mgrs_square_osmium(
-    mgrs_square: str,
+def _download_data_for_bounds(
+    bounds: Tuple[float, float, float, float],
     region: str,
-    force: bool = False
+    output_dir: Path,
+    label: str,
+    bounds_meta: dict,
+    force: bool = False,
+    skip_reference_tiles: bool = False,
+    cached_pbf: Optional[Path] = None,
 ) -> None:
-    """Download all data for an MGRS 100km square using Osmium."""
+    """Core data acquisition: extract OSM features, elevation, and coastline for a bbox.
 
-    # Check osmium is installed
+    Used by both per-MGRS-square and bulk extraction modes. Writes outputs into
+    output_dir using the standard layout (elevation.tif, *.geojson, bounds.json).
+
+    Args:
+        bounds: (min_lon, min_lat, max_lon, max_lat)
+        region: Geofabrik region key (e.g. "cuba")
+        output_dir: Destination directory
+        label: Label used in cache filenames and reference tile naming
+        bounds_meta: Extra fields to merge into bounds.json (e.g. {"gzd": "17Q", "square": "PD"})
+        force: Re-extract even if cached files exist
+        skip_reference_tiles: Skip the reference-tile download (large bulk areas)
+        cached_pbf: Pre-extracted region PBF to use instead of re-extracting
+    """
     if not check_osmium_installed():
         print("ERROR: osmium-tool is not installed.")
         print("Install with: brew install osmium-tool")
         sys.exit(1)
 
-    # Parse the MGRS square
-    gzd, square = parse_mgrs_square(mgrs_square)
-    print(f"\n{'='*60}")
-    print(f"Downloading data for MGRS square: {gzd} {square}")
-    print(f"Using Geofabrik region: {region}")
-    print(f"{'='*60}")
-
-    # Use MGRS square bounds directly — the square fully covers the area needed
-    print("\nCalculating bounds...")
-    bounds = get_mgrs_square_bounds(gzd, square)
-    mgrs_bounds = bounds
-
     min_lon, min_lat, max_lon, max_lat = bounds
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\nOutput directory: {output_dir}")
     print(f"  SW: {min_lat:.4f}N, {min_lon:.4f}E")
     print(f"  NE: {max_lat:.4f}N, {max_lon:.4f}E")
     print(f"  Size: ~{(max_lat - min_lat) * 111:.0f}km x ~{(max_lon - min_lon) * 111 * 0.9:.0f}km")
 
-    # Create output directory
-    output_dir = DATA_DIR / gzd / square
-    output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"\nOutput directory: {output_dir}")
+    bounds_record = {
+        "bounds": {
+            "min_lon": min_lon,
+            "min_lat": min_lat,
+            "max_lon": max_lon,
+            "max_lat": max_lat
+        },
+        "source": {
+            "type": "geofabrik",
+            "region": region
+        }
+    }
+    bounds_record.update(bounds_meta)
+    with open(output_dir / "bounds.json", 'w') as f:
+        json.dump(bounds_record, f, indent=2)
 
-    # Save bounds info
-    bounds_file = output_dir / "bounds.json"
-    with open(bounds_file, 'w') as f:
-        json.dump({
-            "gzd": gzd,
-            "square": square,
-            "mgrs": f"{gzd}{square}",
-            "bounds": {
-                "min_lon": min_lon,
-                "min_lat": min_lat,
-                "max_lon": max_lon,
-                "max_lat": max_lat
-            },
-            "source": {
-                "type": "geofabrik",
-                "region": region
-            }
-        }, f, indent=2)
-
-    # Download elevation
     print("\nDownloading elevation data...")
     download_elevation(bounds, output_dir)
 
-    # Download Geofabrik PBF
     print("\nPreparing OSM data...")
-    regional_pbf = download_geofabrik_pbf(region)
-
-    # Extract region PBF
-    print(f"  Extracting region from {region} PBF...")
-    safe_region = region.replace("/", "_").replace("-", "_")
-    region_pbf = GEOFABRIK_DIR / f"{safe_region}_{gzd}_{square}.osm.pbf"
-    legacy_region_pbf = GEOFABRIK_DIR / f"{gzd}_{square}.osm.pbf"
-
-    # Legacy cache files were keyed only by square and could come from the wrong region.
-    # Keep them on disk, but never trust them for current runs.
-    if legacy_region_pbf.exists() and not region_pbf.exists():
-        print(f"    Ignoring legacy cache {legacy_region_pbf.name} (region-agnostic)")
-
-    if region_pbf.exists() and not force:
-        print(f"    Using cached {region_pbf.name}")
+    if cached_pbf and cached_pbf.exists():
+        print(f"  Using pre-extracted PBF {cached_pbf.name}")
+        region_pbf = cached_pbf
     else:
-        if not extract_region_pbf(regional_pbf, bounds, region_pbf):
-            print("    ERROR: Failed to extract region")
-            sys.exit(1)
+        regional_pbf = download_geofabrik_pbf(region)
+        safe_region = region.replace("/", "_").replace("-", "_")
+        safe_label = label.replace("/", "_").replace(" ", "_")
+        region_pbf = GEOFABRIK_DIR / f"{safe_region}_{safe_label}.osm.pbf"
 
-        # Get file info
-        result = subprocess.run(
-            [get_osmium_path(), "fileinfo", "-e", str(region_pbf)],
-            capture_output=True,
-            text=True
-        )
-        # Extract counts from output
-        for line in result.stdout.split('\n'):
-            if 'Number of nodes:' in line:
-                print(f"    {line.strip()}")
-            elif 'Number of ways:' in line:
-                print(f"    {line.strip()}")
-            elif 'Number of relations:' in line:
-                print(f"    {line.strip()}")
+        if region_pbf.exists() and not force:
+            print(f"  Using cached {region_pbf.name}")
+        else:
+            print(f"  Extracting bbox from {region} PBF...")
+            if not extract_region_pbf(regional_pbf, bounds, region_pbf):
+                print("  ERROR: Failed to extract region")
+                sys.exit(1)
+            result = subprocess.run(
+                [get_osmium_path(), "fileinfo", "-e", str(region_pbf)],
+                capture_output=True, text=True
+            )
+            for line in result.stdout.split('\n'):
+                if any(k in line for k in ('Number of nodes:', 'Number of ways:', 'Number of relations:')):
+                    print(f"    {line.strip()}")
 
-    # Extract features
     print("\nExtracting OSM features...")
-
     for filename, tag_filter in OSM_FEATURES.items():
         output_file = output_dir / filename
-
         if output_file.exists() and not force:
             with open(output_file) as f:
-                data = json.load(f)
-                count = len(data.get("features", []))
+                count = len(json.load(f).get("features", []))
             print(f"  {filename}: {count} features (cached)")
             continue
-
         print(f"  Extracting {filename}...", end=" ", flush=True)
-        count = filter_and_export_features(
-            region_pbf,
-            output_file,
-            tag_filter
-        )
+        count = filter_and_export_features(region_pbf, output_file, tag_filter)
         print(f"{count} features")
 
-    # Coastline needs special handling (not in Geofabrik regional extracts)
     coastline_file = output_dir / "coastline.geojson"
     if coastline_file.exists() and not force:
         with open(coastline_file) as f:
-            data = json.load(f)
-            count = len(data.get("features", []))
+            count = len(json.load(f).get("features", []))
         print(f"  coastline.geojson: {count} features (cached)")
     else:
         print("  Downloading coastline.geojson (via Overpass)...", end=" ", flush=True)
         if download_coastline_overpass(bounds, coastline_file):
             with open(coastline_file) as f:
-                data = json.load(f)
-                count = len(data.get("features", []))
+                count = len(json.load(f).get("features", []))
             print(f"{count} features")
         else:
             print("failed")
 
-    # Download reference tiles
-    print("\nDownloading reference tiles...")
-    download_reference_tiles(bounds, output_dir, f"{gzd}_{square}", zoom=12)
+    if not skip_reference_tiles:
+        print("\nDownloading reference tiles...")
+        download_reference_tiles(bounds, output_dir, label, zoom=12)
+    else:
+        print("\nSkipping reference tiles (bulk mode — area too large)")
 
-    # Summary
-    print(f"\n{'='*60}")
-    print(f"Download complete: {output_dir}")
-    print(f"{'='*60}")
-
-    # Count total features
     total_features = 0
     for filename in list(OSM_FEATURES.keys()) + ["coastline.geojson"]:
         filepath = output_dir / filename
         if filepath.exists():
             try:
                 with open(filepath) as f:
-                    data = json.load(f)
-                    total_features += len(data.get("features", []))
-            except:
+                    total_features += len(json.load(f).get("features", []))
+            except Exception:
                 pass
-
     print(f"\nTotal OSM features: {total_features:,}")
+
+
+def download_mgrs_square_osmium(
+    mgrs_square: str,
+    region: str,
+    force: bool = False
+) -> None:
+    """Download all data for an MGRS 100km square using Osmium."""
+    gzd, square = parse_mgrs_square(mgrs_square)
+    print(f"\n{'='*60}")
+    print(f"Downloading data for MGRS square: {gzd} {square}")
+    print(f"Using Geofabrik region: {region}")
+    print(f"{'='*60}")
+
+    print("\nCalculating bounds...")
+    bounds = get_mgrs_square_bounds(gzd, square)
+    output_dir = DATA_DIR / gzd / square
+
+    _download_data_for_bounds(
+        bounds=bounds,
+        region=region,
+        output_dir=output_dir,
+        label=f"{gzd}_{square}",
+        bounds_meta={"gzd": gzd, "square": square, "mgrs": f"{gzd}{square}"},
+        force=force,
+        skip_reference_tiles=False,
+    )
+
+    print(f"\n{'='*60}")
+    print(f"Download complete: {output_dir}")
+    print(f"{'='*60}")
+
+
+def download_bbox_osmium(
+    bounds: Tuple[float, float, float, float],
+    region: str,
+    output_dir: Path,
+    label: str,
+    force: bool = False,
+) -> None:
+    """Download all data for an arbitrary WGS84 bounding box using Osmium.
+
+    Used for bulk extraction when a map covers many MGRS squares: a single
+    osmium pass over the cluster bounds replaces N per-square passes.
+    """
+    print(f"\n{'='*60}")
+    print(f"Bulk extracting data for bbox: {label}")
+    print(f"Using Geofabrik region: {region}")
+    print(f"{'='*60}")
+
+    _download_data_for_bounds(
+        bounds=bounds,
+        region=region,
+        output_dir=output_dir,
+        label=label,
+        bounds_meta={"label": label},
+        force=force,
+        skip_reference_tiles=True,
+    )
+
+    print(f"\n{'='*60}")
+    print(f"Bulk download complete: {output_dir}")
+    print(f"{'='*60}")
 
 
 def main():
@@ -860,11 +891,15 @@ New regions can be added by downloading PBF files to data/geofabrik/.
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("mgrs_square", nargs="*", help="MGRS square (e.g., '51R TG' or '51RTG')")
-    parser.add_argument("--region", required=True, help="Geofabrik region name")
+    parser.add_argument("--region", required=False, help="Geofabrik region name")
     parser.add_argument("--force", action="store_true",
                         help="Force re-download of all features (ignore existing files)")
     parser.add_argument("--list-regions", action="store_true",
                         help="List available Geofabrik regions (auto-discovered from cache)")
+    parser.add_argument("--bbox", nargs=4, type=float, metavar=("MIN_LON", "MIN_LAT", "MAX_LON", "MAX_LAT"),
+                        help="Bulk extraction mode: extract this WGS84 bbox to --output-dir")
+    parser.add_argument("--output-dir", help="Output directory (required with --bbox)")
+    parser.add_argument("--label", default="bulk", help="Label for cache filenames (used with --bbox)")
 
     args = parser.parse_args()
 
@@ -884,8 +919,28 @@ New regions can be added by downloading PBF files to data/geofabrik/.
             print("  https://download.geofabrik.de/europe/ukraine-latest.osm.pbf")
         sys.exit(0)
 
+    if args.bbox:
+        if not args.output_dir:
+            print("ERROR: --output-dir is required with --bbox")
+            sys.exit(1)
+        if not args.region:
+            print("ERROR: --region is required with --bbox")
+            sys.exit(1)
+        download_bbox_osmium(
+            bounds=tuple(args.bbox),
+            region=args.region,
+            output_dir=Path(args.output_dir),
+            label=args.label,
+            force=args.force,
+        )
+        return
+
     if not args.mgrs_square:
         parser.print_help()
+        sys.exit(1)
+
+    if not args.region:
+        print("ERROR: --region is required")
         sys.exit(1)
 
     mgrs_square = " ".join(args.mgrs_square)

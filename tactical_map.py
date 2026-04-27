@@ -428,6 +428,11 @@ class MapConfig:
     data_max_y: float = 0
     # UTM CRS for this location (computed from center coordinates)
     utm_crs: str = ""
+    # Optional bulk-data directory. When set, get_all_data_paths returns
+    # only this path and the per-MGRS-square enumeration is skipped.
+    # Used for multi-map clusters at large hex sizes where doing 50+ separate
+    # osmium extracts (one per MGRS square) is prohibitively slow.
+    bulk_data_path: Optional[Path] = None
 
     def __post_init__(self):
         # Set UTM CRS based on center location
@@ -782,13 +787,16 @@ def scan_sheet_elevation(config: MapConfig) -> Optional[float]:
     Returns:
         Minimum elevation in meters, or None if DEM unavailable
     """
-    # Check if DEM exists
-    dem_path = config.data_path / "elevation.tif"
-    if not dem_path.exists():
-        # Try to extract data first
-        auto_extract_mgrs_data(config)
+    # If bulk path is set, use that DEM directly. Otherwise fall back to per-MGRS-square data.
+    if config.bulk_data_path is not None and (config.bulk_data_path / "elevation.tif").exists():
+        pass  # load_dem will pick it up via get_all_data_paths
+    else:
+        dem_path = config.data_path / "elevation.tif"
         if not dem_path.exists():
-            return None
+            # Try per-square extraction first
+            auto_extract_mgrs_data(config)
+            if not dem_path.exists():
+                return None
 
     try:
         # Load DEM (already in WGS84/EPSG:4326)
@@ -803,9 +811,14 @@ def scan_sheet_elevation(config: MapConfig) -> Optional[float]:
         half_width_deg = (map_width_m / 2) / meters_per_deg_lon
         half_height_deg = (map_height_m / 2) / meters_per_deg_lat
 
-        # Sample grid (roughly every 500m = ~20x13 samples)
+        # Sample grid (roughly every 500m = ~20x13 samples).
+        # Read the elevation band ONCE — calling dem.read(1) inside the loop
+        # re-decodes the entire raster on every iteration and is catastrophic
+        # when the DEM is large (e.g. a bulk cluster covering 660km × 1100km).
         sample_spacing_deg = 500 / meters_per_deg_lat
         elevations = []
+        band = dem.read(1)
+        nodata = dem.nodata
 
         lat = config.center_lat - half_height_deg
         while lat <= config.center_lat + half_height_deg:
@@ -814,10 +827,10 @@ def scan_sheet_elevation(config: MapConfig) -> Optional[float]:
                 try:
                     row, col = dem.index(lon, lat)
                     if 0 <= row < dem.height and 0 <= col < dem.width:
-                        elev = dem.read(1)[row, col]
-                        if elev != dem.nodata and elev > -1000:
+                        elev = band[row, col]
+                        if elev != nodata and elev > -1000:
                             elevations.append(float(elev))
-                except:
+                except Exception:
                     pass
                 lon += sample_spacing_deg
             lat += sample_spacing_deg
@@ -911,22 +924,60 @@ def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
     for name, lat, lon in sheet_centers:
         print(f"  Sheet {name}: {lat:.4f}°N, {lon:.4f}°E")
 
-    # Pre-scan all sheets to find global minimum elevation
-    # This ensures consistent elevation banding across all sheets
-    print(f"\nPre-scanning elevation across all sheets...")
-    sheet_min_elevations = []
+    # Build per-sheet configs once so we can reason about the cluster's union bounds
+    sheet_configs = []
     for sheet_name, sheet_lat, sheet_lon in sheet_centers:
-        scan_config = MapConfig(
+        sheet_configs.append((sheet_name, MapConfig(
             name=f"{base_config.name}_{sheet_name}",
             center_lat=sheet_lat,
             center_lon=sheet_lon,
             region=base_config.region,
             country=base_config.country,
+            geofabrik_region=base_config.geofabrik_region,
             rotation_deg=base_config.rotation_deg,
             hex_size_m=base_config.hex_size_m,
             contour_interval=base_config.contour_interval,
             index_contour_interval=base_config.index_contour_interval,
-        )
+        )))
+
+    # If any sheet would cross the bulk threshold, do ONE osmium pass over the
+    # union bounds across all sheets. This replaces N×M per-square extracts
+    # (N sheets × M squares each) with a single bbox extract, which is dramatically
+    # faster for large-hex maps that span many MGRS squares.
+    cluster_bulk_path = None
+    needs_bulk = any(
+        should_use_bulk_extract(get_mgrs_squares_for_bounds(cfg.data_bounds))
+        for _, cfg in sheet_configs
+    )
+    if needs_bulk:
+        union_bounds = _compute_cluster_union_bounds([cfg for _, cfg in sheet_configs])
+        region = base_config.geofabrik_region or _infer_region_from_bounds(union_bounds)
+        if region:
+            print(f"\nCluster spans many MGRS squares — using single bulk extract")
+            cluster_bulk_path = auto_extract_bulk_data(
+                base_config,
+                bounds=union_bounds,
+                region=region,
+                label=f"{base_config.name}_cluster",
+            )
+            if cluster_bulk_path is not None:
+                # Make sure base_config carries the resolved region so sheets inherit it
+                if not base_config.geofabrik_region:
+                    base_config.geofabrik_region = region
+                    base_config.country = get_region_display_name(region)
+                # Apply bulk path to every sheet config so pre-scan and generation
+                # both use the bulk dir.
+                for _, cfg in sheet_configs:
+                    cfg.bulk_data_path = cluster_bulk_path
+                    if not cfg.geofabrik_region:
+                        cfg.geofabrik_region = region
+                        cfg.country = get_region_display_name(region)
+
+    # Pre-scan all sheets to find global minimum elevation
+    # This ensures consistent elevation banding across all sheets
+    print(f"\nPre-scanning elevation across all sheets...")
+    sheet_min_elevations = []
+    for sheet_name, scan_config in sheet_configs:
         min_elev = scan_sheet_elevation(scan_config)
         if min_elev is not None:
             sheet_min_elevations.append(min_elev)
@@ -946,9 +997,11 @@ def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
     generated_sheets = []
     width_m, height_m = calculate_map_dimensions(base_config.hex_size_m)
 
-    for i, (sheet_name, sheet_lat, sheet_lon) in enumerate(sheet_centers):
+    for i, (sheet_name, sheet_config) in enumerate(sheet_configs):
+        sheet_lat = sheet_config.center_lat
+        sheet_lon = sheet_config.center_lon
         print(f"\n{'='*60}")
-        print(f"Generating Sheet {sheet_name} ({i+1}/{len(sheet_centers)})")
+        print(f"Generating Sheet {sheet_name} ({i+1}/{len(sheet_configs)})")
         print(f"{'='*60}")
 
         # Determine which edges are shared with adjacent sheets
@@ -956,21 +1009,12 @@ def generate_multi_map_cluster(base_config: MapConfig, multi_map: dict):
         if shared_edges:
             print(f"Shared edges: {', '.join(shared_edges)}")
 
-        # Create config for this sheet
-        # Use the same region and rotation as base config
-        sheet_config = MapConfig(
-            name=f"{base_config.name}_{sheet_name}" if sheet_name else base_config.name,
-            center_lat=sheet_lat,
-            center_lon=sheet_lon,
-            region=base_config.region,
-            country=base_config.country,
-            rotation_deg=base_config.rotation_deg,
-            timestamp=base_config.timestamp,  # Use same timestamp for cluster
-            elevation_band_interval=base_config.elevation_band_interval,
-            hex_size_m=base_config.hex_size_m,
-            contour_interval=base_config.contour_interval,
-            index_contour_interval=base_config.index_contour_interval,
-        )
+        # Apply the cluster's shared timestamp/elevation-band-interval. (These
+        # weren't set on the per-sheet configs created above because we want
+        # MapConfig.__post_init__ to compute fresh bounds; the shared metadata
+        # is patched in here so each sheet writes into the same output folder.)
+        sheet_config.timestamp = base_config.timestamp
+        sheet_config.elevation_band_interval = base_config.elevation_band_interval
 
         # Generate this sheet with cluster-wide elevation base and shared edge info
         output_path = generate_single_sheet(
@@ -1090,36 +1134,56 @@ def generate_single_sheet(
     print(f"Center: {config.center_lat:.4f}°N, {config.center_lon:.4f}°E")
     print(f"Grid: {GRID_WIDTH} x {GRID_HEIGHT} hexes @ {config.hex_size_m}m")
 
-    # Check if data exists, try to extract if not
-    dem_path = config.data_path / "elevation.tif"
-    data_missing = not config.data_path.exists() or not dem_path.exists()
-
-    if data_missing:
-        print(f"Data not found for {config.region}, attempting to extract...")
-        extracted_country = auto_extract_mgrs_data(config)
-        if extracted_country and not config.geofabrik_region:
-            config.geofabrik_region = extracted_country
-            config.country = get_region_display_name(extracted_country)
-        # Re-check
-        if not dem_path.exists():
-            print(f"ERROR: Could not get data for {config.region}")
-            return None
-
-    # Ensure all needed MGRS squares are available
+    # Decide between bulk and per-MGRS-square data acquisition.
+    # If the cluster orchestrator already set bulk_data_path, just trust it.
+    # Otherwise count the squares the map needs and switch to bulk above threshold.
     needed_squares = get_mgrs_squares_for_bounds(config.data_bounds)
-    available_paths = get_all_data_paths(config)
-    available_squares = [str(p).replace("data/", "") for p in available_paths]
-    missing_squares = [sq for sq in needed_squares if sq not in available_squares]
 
-    if missing_squares:
-        print(f"Extracting additional MGRS squares: {', '.join(missing_squares)}")
-        available_pbfs = get_available_country_pbfs()
-        if available_pbfs:
-            for sq in missing_squares:
-                result = extract_single_mgrs_square(sq, available_pbfs)
-                if result and not config.geofabrik_region:
-                    config.geofabrik_region = result
-                    config.country = get_region_display_name(result)
+    if config.bulk_data_path is None and should_use_bulk_extract(needed_squares):
+        print(f"Map covers {len(needed_squares)} MGRS squares — using bulk extract")
+        # Make sure we know the geofabrik region BEFORE bulk extraction.
+        if not config.geofabrik_region:
+            inferred = detect_region_for_coords(config.center_lat, config.center_lon)
+            if inferred:
+                config.geofabrik_region = inferred
+                config.country = get_region_display_name(inferred)
+        bulk_dir = auto_extract_bulk_data(config)
+        if bulk_dir is not None:
+            config.bulk_data_path = bulk_dir
+
+    if config.bulk_data_path is not None:
+        # Bulk path is in use — skip per-square enumeration entirely.
+        if not (config.bulk_data_path / "elevation.tif").exists():
+            print(f"ERROR: Bulk data missing elevation.tif at {config.bulk_data_path}")
+            return None
+    else:
+        # Per-MGRS-square acquisition (small maps, cache-friendly).
+        dem_path = config.data_path / "elevation.tif"
+        data_missing = not config.data_path.exists() or not dem_path.exists()
+
+        if data_missing:
+            print(f"Data not found for {config.region}, attempting to extract...")
+            extracted_country = auto_extract_mgrs_data(config)
+            if extracted_country and not config.geofabrik_region:
+                config.geofabrik_region = extracted_country
+                config.country = get_region_display_name(extracted_country)
+            if not dem_path.exists():
+                print(f"ERROR: Could not get data for {config.region}")
+                return None
+
+        available_paths = get_all_data_paths(config)
+        available_squares = [str(p).replace("data/", "") for p in available_paths]
+        missing_squares = [sq for sq in needed_squares if sq not in available_squares]
+
+        if missing_squares:
+            print(f"Extracting additional MGRS squares: {', '.join(missing_squares)}")
+            available_pbfs = get_available_country_pbfs()
+            if available_pbfs:
+                for sq in missing_squares:
+                    result = extract_single_mgrs_square(sq, available_pbfs)
+                    if result and not config.geofabrik_region:
+                        config.geofabrik_region = result
+                        config.country = get_region_display_name(result)
 
     # Create hex grid
     grid = TacticalHexGrid(config)
@@ -5412,11 +5476,213 @@ def auto_extract_mgrs_data(config: 'MapConfig') -> str:
     return ""
 
 
-def get_all_data_paths(config: 'MapConfig') -> List[Path]:
-    """Get data paths for all MGRS squares covering the data bounds.
+# Threshold for switching from per-MGRS-square extraction to a single bulk
+# osmium pass. Per-square is cache-friendly for small tactical maps that
+# overlap. Once the map covers more than this many squares, the per-square
+# path's repeated PBF scans dominate and a single bbox extract is much faster.
+BULK_EXTRACT_SQUARE_THRESHOLD = 4
 
-    Returns list of paths that exist and have data.
+
+def should_use_bulk_extract(needed_squares: List[str]) -> bool:
+    """True when bulk-extract mode should be used for this set of MGRS squares."""
+    return len(needed_squares) > BULK_EXTRACT_SQUARE_THRESHOLD
+
+
+def compute_wgs84_bounds(config: 'MapConfig', buffer_deg: float = 0.05) -> Tuple[float, float, float, float]:
+    """Convert config.data_bounds (UTM) to a WGS84 bbox with a small buffer."""
+    transformer = Transformer.from_crs(config.utm_crs or GRID_CRS, WGS84, always_xy=True)
+    corners = [
+        (config.data_min_x, config.data_min_y),
+        (config.data_max_x, config.data_min_y),
+        (config.data_max_x, config.data_max_y),
+        (config.data_min_x, config.data_max_y),
+    ]
+    lonlat = [transformer.transform(x, y) for x, y in corners]
+    lons = [p[0] for p in lonlat]
+    lats = [p[1] for p in lonlat]
+    return (min(lons) - buffer_deg, min(lats) - buffer_deg,
+            max(lons) + buffer_deg, max(lats) + buffer_deg)
+
+
+def _compute_cluster_union_bounds(configs: List['MapConfig'], buffer_deg: float = 0.05) -> Tuple[float, float, float, float]:
+    """Union of WGS84 bounds across multiple sheet configs.
+
+    Computes each sheet's bounds using its OWN UTM zone (not the cluster's
+    global GRID_CRS) to avoid the distortion that happens when projecting a
+    point from one zone into another's coordinates.
     """
+    all_lons = []
+    all_lats = []
+    for cfg in configs:
+        # Compute the sheet's local UTM bounds in its own zone, then convert.
+        epsg = cfg.utm_crs or GRID_CRS
+        local_to_utm = Transformer.from_crs(WGS84, epsg, always_xy=True)
+        utm_to_wgs = Transformer.from_crs(epsg, WGS84, always_xy=True)
+        cx, cy = local_to_utm.transform(cfg.center_lon, cfg.center_lat)
+        # Use the same expansion factor the existing calculate_bounds applies.
+        # Approximation: half the data-bounds size in meters in the cluster CRS,
+        # but recomputed for this sheet's own zone for better accuracy.
+        half_w = (cfg.data_max_x - cfg.data_min_x) / 2
+        half_h = (cfg.data_max_y - cfg.data_min_y) / 2
+        for ex, ey in [(cx - half_w, cy - half_h), (cx + half_w, cy - half_h),
+                       (cx + half_w, cy + half_h), (cx - half_w, cy + half_h)]:
+            lon, lat = utm_to_wgs.transform(ex, ey)
+            all_lons.append(lon)
+            all_lats.append(lat)
+    return (min(all_lons) - buffer_deg, min(all_lats) - buffer_deg,
+            max(all_lons) + buffer_deg, max(all_lats) + buffer_deg)
+
+
+def bulk_extract_path_for_bounds(region: str, bounds: Tuple[float, float, float, float]) -> Path:
+    """Compute a deterministic bulk data directory for a region+bounds pair.
+
+    Hashing the bounds gives cache hits on repeated runs of the same map.
+    """
+    import hashlib
+    bbox_str = f"{bounds[0]:.4f}_{bounds[1]:.4f}_{bounds[2]:.4f}_{bounds[3]:.4f}"
+    h = hashlib.sha256(bbox_str.encode()).hexdigest()[:12]
+    safe_region = region.replace("/", "_").replace("-", "_") if region else "unknown"
+    return DATA_DIR / "_bulk" / f"{safe_region}_{h}"
+
+
+def auto_extract_bulk_data(
+    config: 'MapConfig',
+    bounds: Optional[Tuple[float, float, float, float]] = None,
+    region: Optional[str] = None,
+    label: Optional[str] = None,
+) -> Optional[Path]:
+    """Run a single osmium pass over arbitrary WGS84 bounds and return the output dir.
+
+    Idempotent: if the deterministic output dir already has elevation.tif, returns it
+    immediately. Otherwise invokes download_mgrs_data_osmium.py with --bbox.
+    """
+    if bounds is None:
+        bounds = compute_wgs84_bounds(config)
+    if region is None:
+        region = config.geofabrik_region or _infer_region_from_bounds(bounds)
+    if not region:
+        print("  Bulk extract: no Geofabrik region available; falling back to per-square extract")
+        return None
+
+    output_dir = bulk_extract_path_for_bounds(region, bounds)
+
+    # Cache hit
+    if output_dir.exists() and (output_dir / "elevation.tif").exists():
+        print(f"  Bulk extract cache hit: {output_dir}")
+        return output_dir
+
+    if label is None:
+        label = f"{config.name}_bulk"
+
+    print(f"\n  Bulk extracting OSM data for cluster bounds:")
+    print(f"    Bounds: ({bounds[0]:.3f}, {bounds[1]:.3f}) → ({bounds[2]:.3f}, {bounds[3]:.3f})")
+    print(f"    Region: {region}")
+    print(f"    Output: {output_dir}")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable, "download_mgrs_data_osmium.py",
+        "--bbox", str(bounds[0]), str(bounds[1]), str(bounds[2]), str(bounds[3]),
+        "--region", region,
+        "--output-dir", str(output_dir),
+        "--label", label,
+    ]
+    try:
+        # No timeout — bulk extract over a country can legitimately take 10+ min,
+        # but is still much faster than 50× per-square subprocess launches.
+        result = subprocess.run(cmd, text=True)
+    except Exception as e:
+        print(f"  Bulk extract failed: {e}")
+        return None
+
+    if result.returncode != 0:
+        print(f"  Bulk extract subprocess returned {result.returncode}")
+        return None
+
+    # If elevation.tif failed (e.g. OpenTopography rate limit), try to build
+    # one by merging per-MGRS-square elevation tiles already on disk.
+    if not (output_dir / "elevation.tif").exists():
+        if not _merge_per_square_elevations_into(bounds, output_dir):
+            print(f"  Bulk extract has no elevation.tif and no per-square fallback")
+            return None
+
+    return output_dir
+
+
+def _merge_per_square_elevations_into(
+    bounds: Tuple[float, float, float, float],
+    output_dir: Path,
+) -> bool:
+    """When the bulk elevation download failed, merge existing per-square
+    elevation.tif files that intersect the bounds into output_dir/elevation.tif.
+
+    Returns True if the merged tile was created.
+    """
+    import rasterio
+    from rasterio.merge import merge
+
+    min_lon, min_lat, max_lon, max_lat = bounds
+    candidates = []
+    for sq_dir in DATA_DIR.glob("*/*/"):
+        elev = sq_dir / "elevation.tif"
+        if not elev.exists():
+            continue
+        bf = sq_dir / "bounds.json"
+        if not bf.exists():
+            continue
+        try:
+            with open(bf) as f:
+                bj = json.load(f)
+            b = bj.get("bounds", {})
+            sw_lon = b.get("min_lon"); sw_lat = b.get("min_lat")
+            ne_lon = b.get("max_lon"); ne_lat = b.get("max_lat")
+            if None in (sw_lon, sw_lat, ne_lon, ne_lat):
+                continue
+            if ne_lon < min_lon or sw_lon > max_lon or ne_lat < min_lat or sw_lat > max_lat:
+                continue
+            candidates.append(elev)
+        except Exception:
+            continue
+
+    if not candidates:
+        return False
+
+    print(f"  Merging {len(candidates)} per-square elevation tiles into bulk dir...")
+    datasets = [rasterio.open(p) for p in candidates]
+    try:
+        merged_data, merged_transform = merge(datasets)
+        profile = datasets[0].profile.copy()
+        profile.update({
+            "height": merged_data.shape[1],
+            "width": merged_data.shape[2],
+            "transform": merged_transform,
+        })
+        with rasterio.open(output_dir / "elevation.tif", "w", **profile) as dst:
+            dst.write(merged_data)
+        print(f"  Wrote merged elevation.tif ({merged_data.shape[2]}x{merged_data.shape[1]})")
+        return True
+    finally:
+        for ds in datasets:
+            ds.close()
+
+
+def _infer_region_from_bounds(bounds: Tuple[float, float, float, float]) -> str:
+    """Look up the Geofabrik region whose bbox contains the bounds center."""
+    cx = (bounds[0] + bounds[2]) / 2
+    cy = (bounds[1] + bounds[3]) / 2
+    return detect_region_for_coords(cy, cx) or ""
+
+
+def get_all_data_paths(config: 'MapConfig') -> List[Path]:
+    """Get data paths covering the map's data bounds.
+
+    When config.bulk_data_path is set (large maps that bypass per-MGRS-square
+    extraction), returns just that path. Otherwise returns one path per MGRS
+    100km square that intersects the data bounds.
+    """
+    if config.bulk_data_path is not None and config.bulk_data_path.exists():
+        return [config.bulk_data_path]
+
     needed_squares = get_mgrs_squares_for_bounds(config.data_bounds)
 
     # Ensure primary square is first
@@ -5472,7 +5738,29 @@ def main():
                     config.country = get_region_display_name(geofabrik_region)
                     print(f"Inferred country from data: {config.country}")
 
-    if data_missing:
+    # Decide between bulk extraction (single osmium pass) and per-MGRS-square
+    # extraction. Multi-map clusters do their own bulk decision in
+    # generate_multi_map_cluster, so we only handle the single-map path here.
+    use_bulk = False
+    if multi_map is None:
+        needed_squares = get_mgrs_squares_for_bounds(config.data_bounds)
+        if should_use_bulk_extract(needed_squares):
+            use_bulk = True
+            print(f"Map covers {len(needed_squares)} MGRS squares — using bulk extract")
+            if not config.geofabrik_region:
+                inferred = detect_region_for_coords(config.center_lat, config.center_lon)
+                if inferred:
+                    config.geofabrik_region = inferred
+                    config.country = get_region_display_name(inferred)
+            bulk_dir = auto_extract_bulk_data(config)
+            if bulk_dir is not None:
+                config.bulk_data_path = bulk_dir
+                # Bulk dir's elevation.tif satisfies the "data exists" check
+                data_missing = False
+            else:
+                use_bulk = False  # bulk failed; fall through to per-square
+
+    if data_missing and not use_bulk:
         print(f"\nData not found for {config.region}")
 
         # Try to auto-extract from available country PBFs
@@ -5511,8 +5799,9 @@ def main():
     if config.rotation_deg != 0:
         print(f"Rotation: {config.rotation_deg}° clockwise")
 
-    # For single maps, check for missing adjacent squares needed for rotation/shifting
-    if not data_missing:
+    # For single maps, check for missing adjacent squares needed for rotation/shifting.
+    # Skip when bulk_data_path is set — bulk extract already covered the full bbox.
+    if not data_missing and config.bulk_data_path is None:
         needed_squares = get_mgrs_squares_for_bounds(config.data_bounds)
         available_paths = get_all_data_paths(config)
         available_squares = [str(p).replace("data/", "") for p in available_paths]
