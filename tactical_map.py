@@ -34,7 +34,7 @@ from pyproj import Transformer, CRS
 import svgwrite
 
 # Local utilities - region registry for auto-discovery of available PBF files
-from region_registry import get_region_display_name, detect_region_for_coords, get_region_output_path_segments
+from region_registry import get_region_display_name, detect_region_for_coords, get_region_output_path_segments, get_available_regions
 
 # Local utilities
 from map_utils import Bounds, RotationConfig, CoordinateTransformer, LayerManager, LayerZOrder
@@ -5304,15 +5304,25 @@ def extract_single_mgrs_square(mgrs_region: str, available_pbfs: list) -> str:
                 return bounds_data.get("source", {}).get("region", "")
         return ""
 
-    # Detect the correct Geofabrik region for this MGRS square by geography
+    # Detect the correct Geofabrik region for this MGRS square by geography.
+    # The 1km-center sub-cell ("5050") falls in the wrong UTM latitude band
+    # for ~30% of squares globally (those that straddle band boundaries).
+    # Fall back to NE corner / SW corner / no-offset, one of which lands in
+    # the declared band for any valid square.
     detected_region = None
     center_lat, center_lon = None, None
-    try:
-        m = mgrs.MGRS()
-        center_lat, center_lon = m.toLatLon(f"{gzd}{square}5050")
-        detected_region = detect_region_for_coords(center_lat, center_lon)
-    except Exception:
-        pass
+    m = mgrs.MGRS()
+    for offset in ("5050", "99009900", "0000", ""):
+        try:
+            center_lat, center_lon = m.toLatLon(f"{gzd}{square}{offset}")
+            break
+        except Exception:
+            continue
+    if center_lat is not None:
+        try:
+            detected_region = detect_region_for_coords(center_lat, center_lon)
+        except Exception:
+            pass
 
     if detected_region:
         regions_to_try = [(detected_region, None)]
