@@ -485,11 +485,215 @@ def download_coastline_overpass(
         return False
 
 
+SKADI_BASE_URL = "https://elevation-tiles-prod.s3.amazonaws.com/skadi"
+SKADI_TILE_CACHE_DIR = Path(__file__).parent / "data" / "elevation_cache" / "skadi"
+
+
+def _skadi_tile_name(lat_floor: int, lon_floor: int) -> str:
+    """Build the Skadi/HGT filename for the 1°×1° tile whose SW corner is (lat_floor, lon_floor)."""
+    ns = "N" if lat_floor >= 0 else "S"
+    ew = "E" if lon_floor >= 0 else "W"
+    return f"{ns}{abs(lat_floor):02d}{ew}{abs(lon_floor):03d}.hgt"
+
+
+def _skadi_tile_url(lat_floor: int, lon_floor: int) -> str:
+    """Mapzen/AWS Open Data SRTM tile URL. 1° tiles, 30m resolution, SRTM-3 / SRTMGL1."""
+    name = _skadi_tile_name(lat_floor, lon_floor)
+    ns = "N" if lat_floor >= 0 else "S"
+    return f"{SKADI_BASE_URL}/{ns}{abs(lat_floor):02d}/{name}.gz"
+
+
+def _fetch_skadi_tile(lat_floor: int, lon_floor: int) -> Optional[Path]:
+    """Download (or read from cache) a single 1°×1° SRTM HGT tile from AWS Open Data.
+
+    Returns the path to the un-gzipped .hgt file, or None if the tile
+    doesn't exist (e.g. open ocean — Mapzen omits all-NODATA tiles).
+    """
+    import gzip
+    SKADI_TILE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    name = _skadi_tile_name(lat_floor, lon_floor)
+    cache_path = SKADI_TILE_CACHE_DIR / name
+    if cache_path.exists() and cache_path.stat().st_size > 0:
+        return cache_path
+
+    url = _skadi_tile_url(lat_floor, lon_floor)
+    try:
+        response = http_request("GET", url, timeout=120)
+    except Exception as e:
+        print(f"    Error fetching {name}: {e}")
+        return None
+
+    if response.status_code == 404:
+        # Mapzen omits all-NODATA (deep ocean) tiles. Synthesize a dummy
+        # marker so we don't keep retrying for this run.
+        return None
+    if response.status_code != 200:
+        print(f"    {name}: HTTP {response.status_code}")
+        return None
+
+    try:
+        decompressed = gzip.decompress(response.content)
+    except Exception as e:
+        print(f"    {name}: decompress failed: {e}")
+        return None
+    cache_path.write_bytes(decompressed)
+    return cache_path
+
+
+def _hgt_to_dataset(hgt_path: Path, lat_floor: int, lon_floor: int):
+    """Open an HGT file as a rasterio in-memory dataset with proper georeference."""
+    import numpy as np
+    import rasterio
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    raw = np.frombuffer(hgt_path.read_bytes(), dtype=">i2")  # SRTM HGT is big-endian int16
+    side = int(np.sqrt(raw.size))
+    if side * side != raw.size:
+        raise ValueError(f"{hgt_path.name}: not a square raster ({raw.size} samples)")
+    arr = raw.reshape((side, side)).astype("int16")
+
+    # 1°×1° tile; pixel size = 1°/(side-1) in geographic degrees
+    pixel = 1.0 / (side - 1)
+    transform = from_origin(lon_floor, lat_floor + 1, pixel, pixel)
+
+    profile = {
+        "driver": "GTiff", "dtype": "int16", "count": 1,
+        "height": side, "width": side, "crs": "EPSG:4326",
+        "transform": transform, "nodata": -32768,
+    }
+    memfile = MemoryFile()
+    with memfile.open(**profile) as ds:
+        ds.write(arr, 1)
+    return memfile.open()
+
+
+def _download_elevation_aws_skadi(
+    bounds: Tuple[float, float, float, float],
+    output_dir: Path,
+) -> bool:
+    """Build elevation.tif by downloading the SRTM HGT tiles that cover bounds
+    from AWS Open Data and merging them. No API key, no rate limit.
+
+    Returns True on success.
+    """
+    import math
+    import rasterio
+    from rasterio.io import MemoryFile
+    from rasterio.merge import merge
+    from rasterio.windows import from_bounds as window_from_bounds
+
+    output_file = output_dir / "elevation.tif"
+    min_lon, min_lat, max_lon, max_lat = bounds
+
+    lat_lo = math.floor(min_lat)
+    lat_hi = math.ceil(max_lat)
+    lon_lo = math.floor(min_lon)
+    lon_hi = math.ceil(max_lon)
+
+    tile_coords = [(lat, lon) for lat in range(lat_lo, lat_hi)
+                              for lon in range(lon_lo, lon_hi)]
+    if not tile_coords:
+        print(f"    AWS SRTM: no tiles needed for bounds")
+        return False
+
+    print(f"    AWS SRTM: fetching {len(tile_coords)} HGT tile(s)...")
+    hgt_paths = []
+    missing = 0
+    for lat_floor, lon_floor in tile_coords:
+        p = _fetch_skadi_tile(lat_floor, lon_floor)
+        if p is None:
+            missing += 1
+            continue
+        hgt_paths.append((p, lat_floor, lon_floor))
+
+    if not hgt_paths:
+        print(f"    AWS SRTM: no tiles available (all open ocean?)")
+        return False
+    if missing:
+        print(f"    AWS SRTM: {missing} tile(s) absent (likely all-ocean — Mapzen omits these)")
+
+    datasets = [_hgt_to_dataset(p, la, lo) for p, la, lo in hgt_paths]
+    try:
+        merged_data, merged_transform = merge(datasets)
+
+        # Crop merged raster to the requested bounds to keep file size sane
+        profile = datasets[0].profile.copy()
+        profile.update({
+            "height": merged_data.shape[1],
+            "width": merged_data.shape[2],
+            "transform": merged_transform,
+        })
+
+        # Write merged to a memfile, then crop to bounds and emit final
+        with MemoryFile() as mf:
+            with mf.open(**profile) as full_ds:
+                full_ds.write(merged_data)
+            with mf.open() as full_ds:
+                window = window_from_bounds(min_lon, min_lat, max_lon, max_lat,
+                                            full_ds.transform)
+                window = window.round_offsets().round_lengths()
+                cropped = full_ds.read(1, window=window)
+                cropped_transform = full_ds.window_transform(window)
+
+        out_profile = profile.copy()
+        out_profile.update({
+            "height": cropped.shape[0],
+            "width": cropped.shape[1],
+            "transform": cropped_transform,
+        })
+        with rasterio.open(output_file, "w", **out_profile) as dst:
+            dst.write(cropped, 1)
+        size_mb = output_file.stat().st_size / 1024 / 1024
+        print(f"    Saved elevation.tif ({cropped.shape[1]}×{cropped.shape[0]}, {size_mb:.1f} MB)")
+        return True
+    finally:
+        for ds in datasets:
+            ds.close()
+
+
+def _download_elevation_opentopo(
+    bounds: Tuple[float, float, float, float],
+    output_dir: Path,
+) -> bool:
+    """Legacy fallback: OpenTopography globaldem API. Subject to 50/24h rate limit."""
+    output_file = output_dir / "elevation.tif"
+    min_lon, min_lat, max_lon, max_lat = bounds
+    url = "https://portal.opentopography.org/API/globaldem"
+    params = {
+        "demtype": "SRTMGL1",
+        "south": min_lat, "north": max_lat,
+        "west": min_lon, "east": max_lon,
+        "outputFormat": "GTiff",
+        "API_Key": OPENTOPOGRAPHY_API_KEY,
+    }
+    try:
+        response = http_request("GET", url, params=params, timeout=600)
+    except Exception as e:
+        print(f"    OpenTopography: {e}")
+        return False
+    if response.status_code == 200:
+        with open(output_file, "wb") as f:
+            f.write(response.content)
+        print(f"    Saved elevation.tif ({len(response.content) / 1024 / 1024:.1f} MB)")
+        return True
+    elif response.status_code == 401:
+        print(f"    OpenTopography: 401 (rate limit or invalid key)")
+        return False
+    else:
+        print(f"    OpenTopography: {response.status_code} {response.text[:200]}")
+        return False
+
+
 def download_elevation(
     bounds: Tuple[float, float, float, float],
     output_dir: Path
 ) -> None:
-    """Download elevation data for the bounds."""
+    """Download elevation data for the bounds.
+
+    Tries AWS Open Data SRTM (Mapzen Skadi tiles) first — no API key, no
+    rate limit — then falls back to OpenTopography globaldem if AWS fails.
+    """
     output_file = output_dir / "elevation.tif"
 
     if output_file.exists():
@@ -501,30 +705,11 @@ def download_elevation(
     print("  Downloading elevation data...")
     print(f"    Bounds: {min_lat:.4f},{min_lon:.4f} to {max_lat:.4f},{max_lon:.4f}")
 
-    url = "https://portal.opentopography.org/API/globaldem"
-    params = {
-        "demtype": "SRTMGL1",
-        "south": min_lat,
-        "north": max_lat,
-        "west": min_lon,
-        "east": max_lon,
-        "outputFormat": "GTiff",
-        "API_Key": OPENTOPOGRAPHY_API_KEY,
-    }
+    if _download_elevation_aws_skadi(bounds, output_dir):
+        return
 
-    try:
-        response = http_request("GET", url, params=params, timeout=600)
-
-        if response.status_code == 200:
-            with open(output_file, 'wb') as f:
-                f.write(response.content)
-            print(f"    Saved elevation.tif ({len(response.content) / 1024 / 1024:.1f} MB)")
-        elif response.status_code == 401:
-            print(f"    Error {response.status_code}: Invalid or missing API key")
-        else:
-            print(f"    Error {response.status_code}: {response.text[:200]}")
-    except Exception as e:
-        print(f"    Error downloading elevation: {e}")
+    print("    Falling back to OpenTopography...")
+    _download_elevation_opentopo(bounds, output_dir)
 
 
 def download_reference_tiles(
