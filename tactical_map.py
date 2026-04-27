@@ -3854,13 +3854,18 @@ def render_tactical_svg(
                 world_coords = list(line.coords)
                 line_length = get_line_length(world_coords)
 
+                # Scale label spacing with hex size so labels stay roughly
+                # proportional to the printed map. At 250m hex they're 1km apart;
+                # at 14km hex, that would be 5500+ labels per map — a swarm.
+                # hex_scale here = config.hex_size_m / 250 (max(1, ...) keeps tactical maps unchanged)
+                label_interval_m = CONTOUR_LABEL_INTERVAL_M * max(1.0, hex_scale)
+
                 # Skip very short lines
-                if line_length < CONTOUR_LABEL_INTERVAL_M / 2:
+                if line_length < label_interval_m / 2:
                     continue
 
                 # Calculate label positions
-                # Start offset from beginning, then place every CONTOUR_LABEL_INTERVAL_M
-                start_offset = CONTOUR_LABEL_INTERVAL_M / 2  # Start halfway through first interval
+                start_offset = label_interval_m / 2  # Start halfway through first interval
                 distance = start_offset
 
                 while distance < line_length - 100:  # Don't label too close to end
@@ -3896,7 +3901,7 @@ def render_tactical_svg(
                     layer_contour_labels.add(text_elem)
                     contour_label_count += 1
 
-                    distance += CONTOUR_LABEL_INTERVAL_M
+                    distance += label_interval_m
 
     print(f"    Added {contour_label_count} contour elevation labels")
 
